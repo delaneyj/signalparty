@@ -5,14 +5,16 @@ import (
 	"math/rand"
 	"reflect"
 
+	xxhash "github.com/cespare/xxhash/v2"
 	mapset "github.com/deckarep/golang-set/v2"
 )
 
 type callback[T any] func() (T, error)
-type equalsFunction[T any] func(prev T, next T) bool
 type errorFunction func(error error)
-type rootFunction func(dispose func())
+type rootFunction[T any] func(dispose func()) T
 type updateFunction[T any] func(prev T) T
+
+var SYMBOL_ERRORS = int64(xxhash.Sum64String("SYMBOL_ERRORS") & 0x7fffffffffffffff)
 
 // Type for the getter function for signals
 type Getter[T any] interface {
@@ -111,8 +113,7 @@ type Signal[T any] struct {
 	parent *Observer
 	// The current value of the signal
 	value T
-	// The equality function
-	equals equalsFunction[T]
+
 	// List of observers to notify when the value of the signal changes
 	// It's a set because sooner or later we must deduplicate registrations
 	// Like, if a signal is read multiple times inside an observer the observer must still be only refreshed once when that signal is updated
@@ -140,7 +141,6 @@ func (s *Signal[T]) asAny() *Signal[any] {
 func (s *Signal[T]) Read() T {
 	// Registering the signal as a dependency, if we are tracking and the parent is a computation (which can be re-executed, in contrast with roots for example)
 
-	panic("OBSERVER instanceof Computation")
 	if s.runtime.tracking && s.runtime.observer != nil {
 		s.observers.Add(s.runtime.observer)
 
@@ -225,7 +225,7 @@ type Observer struct {
 
 	waiting func() int
 	update  func()
-	stale   func(change int, fresh bool)
+	stale   func(change int, fresh bool) error
 }
 
 // Disposing, clearing everything
@@ -286,24 +286,24 @@ type Root struct {
 	*Observer
 }
 
-func wrapRoot[T any](r *Root, fn func(dispose func())) error {
+func wrapRoot[T any](r *Root, rootFn rootFunction[T]) (T, error) {
 	// Making a customized function, so that we can reuse the Wrapper.wrap function, which doesn't pass anything to our function
 
 	// Calling our function, with "this" as the current observer, and "false" as the value for TRACKING
-	if _, err := wrap[T](
+	t, err := wrap(
 		r.runtime,
 		func() (T, error) {
-			fn(r.dispose)
-			var t T
+			t := rootFn(r.dispose)
 			return t, nil
 		},
 		r.Observer,
 		false,
-	); err != nil {
-		return fmt.Errorf("can't wrap root: %w", err)
+	)
+	if err != nil {
+		return t, fmt.Errorf("can't wrap root: %w", err)
 	}
 
-	return nil
+	return t, nil
 }
 
 // A computation is an observer like a root, but it can be re-executed and it can be disposed from its parent
@@ -344,6 +344,8 @@ func newComputation[T any](runtime *Runtime, fn callback[T]) (*Computation[T], e
 	c.Observer.waiting = func() int {
 		return c.waiting
 	}
+
+	c.Observer.stale = c.stale
 
 	return c, nil
 }
@@ -432,7 +434,7 @@ func (c *Computation[T]) stale(change int, fresh bool) error {
 // /* METHODS */
 
 func CreateSignal[T any](runtime *Runtime, value T) *Signal[T] {
-	return newSignal[T](runtime, value)
+	return newSignal(runtime, value)
 }
 
 // An effect is just a computation that doesn't return anything
@@ -451,12 +453,13 @@ func CreateMemo[T any](runtime *Runtime, fn callback[T]) (Getter[T], error) {
 
 // A root is just a plain observer that exposes the "dispose" method and that will survive its parent observer being disposed
 // Roots are essential for achieving great performance with things like <For> in Solid
-func CreateRoot[T any](runtime *Runtime, fn callback[T]) T {
+func CreateRoot[T any](runtime *Runtime, fn rootFunction[T]) (T, error) {
 	r := &Root{
 		Observer: &Observer{
 			runtime: runtime,
 		},
 	}
+
 	return wrapRoot(r, fn)
 }
 
@@ -482,71 +485,66 @@ func UseContext[T any](c *Context[T]) T {
 	return c.Read()
 }
 
-func OnCleanup[T any](fn callback[T]) {
+func OnCleanup[T any](r *Runtime, fn callback[T]) {
 	// If there's a current observer
+	if r.observer != nil {
+		// convert to callback[any]
+		var x interface{} = fn
+		fnAny, ok := x.(callback[any])
+		if !ok {
+			panic("invalid type")
+		}
+
+		// Let's add a cleanup function to it
+		r.observer.cleanups = append(r.observer.cleanups, fnAny)
+	}
+
 }
 
-// function onCleanup ( fn: Callback ): void {
+// Batch is an important performance feature, it holds onto updates until the function has finished executing, so that computations are later re-executed the minimum amount of times possible
+// Like if you change a signal in a loop, for some reason, then without batching its observers will be re-executed with each iteration
+// With batching they are only executed at this end, potentially just 1 time instead of N times
+// While batching is active the getter will give you the "old" value of the signal, as the new one hasn't actually been be set yet
+func Batch[T any](r *Runtime, fn callback[T]) (T, error) {
+	// Already batching? Nothing else to do then
+	if r.batch != nil {
+		return fn()
+	}
 
-//   // If there's a current observer let's add a cleanup function to it
-//   OBSERVER?.cleanups.push ( fn );
+	defer func() {
+		// Turning off batching
+		r.batch = nil
 
-// }
+		// Marking all the signals as stale, all at once, or each update to each signal will cause its observers to be updated, but there might be observers listening to multiple of these signals, we want to execute them once still if possible
+		// We don't know if something will change, so we set the "fresh" flag to "false"
+		for signal := range r.batch {
+			signal.stale(1, false)
+		}
+		// Updating values
+		for signal, value := range r.batch {
+			signal.Write(value)
+		}
 
-// function onError ( fn: ErrorFunction ): void {
+		// Now making all those signals as not stale, allowing observers to finally update themselves
+		// We don't know if something did change, so we set the "fresh" flag to "false"
+		for signal := range r.batch {
+			signal.stale(-1, false)
+		}
+	}()
 
-//   if ( !OBSERVER ) return;
+	// New batch bucket where to store upcoming values for signals
+	r.batch = map[*Signal[any]]any{}
 
-//   // If there's a current observer let's add an error handler function to it, ensuring the array containing these functions exists first though
-//   OBSERVER.contexts[SYMBOL_ERRORS] ||= [];
-//   OBSERVER.contexts[SYMBOL_ERRORS].push ( fn );
+	// Important to use a try..catch as the function may throw, messing up our flushing of updates later on
+	t, err := fn()
+	if err != nil {
+		return t, fmt.Errorf("error while running batched callback: %w", err)
+	}
 
-// }
+	return t, nil
+}
 
-// // Batching is an important performance feature, it holds onto updates until the function has finished executing, so that computations are later re-executed the minimum amount of times possible
-// // Like if you change a signal in a loop, for some reason, then without batching its observers will be re-executed with each iteration
-// // With batching they are only executed at this end, potentially just 1 time instead of N times
-// // While batching is active the getter will give you the "old" value of the signal, as the new one hasn't actually been be set yet
-// function batch <T> ( fn: Callback<T> ): T {
-
-//   // Already batching? Nothing else to do then
-//   if ( BATCH ) return fn ();
-
-//   // New batch bucket where to store upcoming values for signals
-//   const batch = BATCH = new Map<Signal, any> ();
-
-//   // Important to use a try..catch as the function may throw, messing up our flushing of updates later on
-//   try {
-
-//     return fn ();
-
-//   } finally {
-
-//     // Turning batching off
-//     BATCH = undefined;
-
-//     // Marking all the signals as stale, all at once, or each update to each signal will cause its observers to be updated, but there might be observers listening to multiple of these signals, we want to execute them once still if possible
-//     // We don't know if something will change, so we set the "fresh" flag to "false"
-//     batch.forEach ( ( value, signal ) => signal.stale ( 1, false ) );
-//     // Updating values
-//     batch.forEach ( ( value, signal ) => signal.set ( () => value ) );
-//     // Now making all those signals as not stale, allowing observers to finally update themselves
-//     // We don't know if something did change, so we set the "fresh" flag to "false"
-//     batch.forEach ( ( value, signal ) => signal.stale ( -1, false ) );
-
-//   }
-
-// }
-
-// function untrack <T> ( fn: Callback<T> ): T {
-
-//   // Turning off tracking
-//   // The observer stays the same, but TRACKING is set to "false"
-//   return Wrapper.wrap ( fn, OBSERVER, false );
-
-// }
-
-// /* EXPORT */
-
-// export {createContext, createEffect, createMemo, createRoot, createSignal, onCleanup, onError, useContext, batch, untrack};
-// export type {Getter, Setter, Context, Options};
+// Turn off tracking, the observer stays the same, but TRACKING is set to "false"
+func Untrack[T any](runtime *Runtime, fn callback[T]) (T, error) {
+	return wrap(runtime, fn, runtime.observer, false)
+}
