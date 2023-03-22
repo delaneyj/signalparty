@@ -11,7 +11,7 @@ import (
 type callback[T any] func() (T, error)
 type equalsFunction[T any] func(prev T, next T) bool
 type errorFunction func(error error)
-type rootFunction[T any] func(dispose callback[T]) T
+type rootFunction func(dispose func())
 type updateFunction[T any] func(prev T) T
 
 // Type for the getter function for signals
@@ -108,7 +108,7 @@ type Signal[T any] struct {
 	runtime *Runtime
 
 	// It's important to keep track of the "parent" memo, if any, because we need to know when reading a signal if it belongs to a parent which isn't up to date, so that we can refresh it in that case
-	parent *Computation[T]
+	parent *Observer
 	// The current value of the signal
 	value T
 	// The equality function
@@ -150,7 +150,7 @@ func (s *Signal[T]) Read() T {
 	// There is a parent and it's stale, we need to refresh it first
 	// Refreshing the parent may cause other computations to be refreshed too, if needed
 	// If we don't do this we get a "glitch", your code could simulaneously see values that don't make sense toghether, like "count" === 3 and "doubleCount" === 4 because it hasn't been updated yet maybe
-	if s.parent != nil && s.parent.waiting != 0 {
+	if s.parent != nil && s.parent.waiting() != 0 {
 		s.parent.update()
 	}
 
@@ -174,19 +174,17 @@ func (s *Signal[T]) Write(next T) T {
 		// Notifying observers now
 
 		// First of all the observers and their observers and so on are marked as stale
-		// We also tell them that something actually changed, so when it comes down to them they can decide if they want to re-run or not
-		// We do this before notifying the observers so that they can read the new value of the signal if they want to
-		// We also do this before notifying the observers so that they can read the new value of the signal if they want to
-		observers := s.observers.ToSlice()
-		for _, observer := range observers {
-			observer.stale = true
-			observer.changed = true
-		}
+		// We also tell them that something actually changed, so when it comes down to it they should update themselves
+		s.stale(1, true)
 
-		// Notifying observers
-		for _, observer := range observers {
-			observer.notify()
-		}
+		// Then they are marked as non-stale
+		// We also tell them that something actually changed, so when it comes down to it they should update themselves
+		s.stale(-1, true)
+
+		// It looks silly but this is crucial
+		// Basically if we don't do that computations might be executed multiple times
+		// We want to execute them as few times as possible to get the best performance
+		// Also while Flimsy doesn't care about performance notifying observers like this is easy and robust
 	}
 
 	return s.value
@@ -215,7 +213,7 @@ type Observer struct {
 	runtime *Runtime
 
 	// The parent observer, if any, we need this because context reads and errors kind of bubble up
-	parent *Observer
+	parent *Computation[any]
 	// List of custom cleanup functions to call
 	cleanups []callback[any]
 	// Object containg data for the context, plus error handlers, if any, since we are putting those there later in this file
@@ -224,6 +222,10 @@ type Observer struct {
 	observers mapset.Set[*Observer]
 	// List of signals that this observer depends on, we need this because when this observer is disposed it has to tell signals to not refresh it anymore
 	signals mapset.Set[*Signal[any]]
+
+	waiting func() int
+	update  func()
+	stale   func(change int, fresh bool)
 }
 
 // Disposing, clearing everything
@@ -265,7 +267,7 @@ func observerGet[T any](o *Observer, id int64) (v T, ok bool) {
 	} else {
 		// Does the parent have a value for this id?
 		if o.parent != nil {
-			return observerGet[T](o.parent, id)
+			return observerGet[T](o.parent.Observer, id)
 		}
 	}
 	return
@@ -284,14 +286,24 @@ type Root struct {
 	*Observer
 }
 
-func wrapRoot[T any](r *Root, fn rootFunction[T]) T {
+func wrapRoot[T any](r *Root, fn func(dispose func())) error {
 	// Making a customized function, so that we can reuse the Wrapper.wrap function, which doesn't pass anything to our function
-	fnWithDispose := func() T {
-		return fn(r.dispose)
-	}
 
 	// Calling our function, with "this" as the current observer, and "false" as the value for TRACKING
-	return wrap(r.runtime, fnWithDispose, r, false)
+	if _, err := wrap[T](
+		r.runtime,
+		func() (T, error) {
+			fn(r.dispose)
+			var t T
+			return t, nil
+		},
+		r.Observer,
+		false,
+	); err != nil {
+		return fmt.Errorf("can't wrap root: %w", err)
+	}
+
+	return nil
 }
 
 // A computation is an observer like a root, but it can be re-executed and it can be disposed from its parent
@@ -327,7 +339,11 @@ func newComputation[T any](runtime *Runtime, fn callback[T]) (*Computation[T], e
 	c.signal = CreateSignal(runtime, t)
 
 	// Linking this computation with the parent, so that we can get a reference to the computation from the signal when we want to check if the computation is stale or not
-	c.signal.parent = c
+	c.signal.parent = c.Observer
+
+	c.Observer.waiting = func() int {
+		return c.waiting
+	}
 
 	return c, nil
 }
