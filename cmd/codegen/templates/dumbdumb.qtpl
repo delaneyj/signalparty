@@ -1,0 +1,338 @@
+{% import (
+    "fmt"
+    "strings"
+) -%}
+
+{% func DumbdumbGen(shouldBeThreadSafe bool, genericParamCount int) -%}
+package dumbdumb
+
+{%- if shouldBeThreadSafe -%}
+import "sync"
+{%- endif -%}
+
+const (
+    DefaultCellCacheSize = 4096
+)
+
+type state uint8
+
+const (
+    clean state = iota
+    dirty
+    computing
+)
+
+type Cell interface {
+    setDirty()
+    eval() any
+}
+
+type ReactiveSystem struct {
+    {%- if shouldBeThreadSafe -%}
+    mu *sync.Mutex
+    {%- endif -%}
+    cells []Cell
+    anyDirty bool
+}
+
+func NewReactiveSystem() *ReactiveSystem {
+    return &ReactiveSystem{
+        {%- if shouldBeThreadSafe -%}
+        mu: &sync.Mutex{},
+        {%- endif -%}
+        cells: make([]Cell, 0, DefaultCellCacheSize),
+        anyDirty: false,
+    }
+}
+
+func (rs *ReactiveSystem) Reset(){
+    {%- if shouldBeThreadSafe -%}
+    rs.mu.Lock()
+    defer rs.mu.Unlock()
+    {%- endif -%}
+
+    rs.anyDirty = false
+    rs.cells = rs.cells[:0]
+}
+
+func (rs *ReactiveSystem) Remove(cells ...Cell) {
+     {%- if shouldBeThreadSafe -%}
+    rs.mu.Lock()
+    defer rs.mu.Unlock()
+    {%- endif -%}
+    rs.remove(cells...)
+}
+
+func (rs *ReactiveSystem) remove (cells ...Cell){
+    removeCount := 0
+    for _, cell := range cells {
+        for i, c := range rs.cells {
+            if c == cell {
+                // move the last element to the current position
+                rs.cells[i] = rs.cells[len(rs.cells)-1]
+                removeCount++
+            }
+        }
+    }
+    rs.cells = rs.cells[:len(rs.cells)-removeCount]
+}
+
+func (rs *ReactiveSystem) evalAll() {
+    for _, c := range rs.cells {
+        c.setDirty()
+    }
+    for _, c := range rs.cells {
+        c.eval()
+    }
+}
+
+type WriteableSignal[T comparable] struct {
+    rs *ReactiveSystem
+    v T
+    state state
+}
+
+func (s *WriteableSignal[T]) Value() T {
+    {%- if shouldBeThreadSafe -%}
+    s.rs.mu.Lock()
+    defer s.rs.mu.Unlock()
+    {%- endif -%}
+    if s.rs.anyDirty {
+        s.rs.evalAll()
+    }
+    return s.v
+}
+
+func (s *WriteableSignal[T]) SetValue(value T) {
+    {%- if shouldBeThreadSafe -%}
+    s.rs.mu.Lock()
+    defer s.rs.mu.Unlock()
+    {%- endif -%}
+    s.state = dirty
+    s.rs.anyDirty = true
+    s.v = value
+    s.rs.evalAll()
+}
+
+func (s *WriteableSignal[T]) setDirty() {
+    // noop
+}
+
+func (s *WriteableSignal[T]) eval() any {
+    return s.v
+}
+
+func Signal[T comparable](rs *ReactiveSystem, value T) *WriteableSignal[T] {
+    s := &WriteableSignal[T]{rs: rs, v: value}
+    rs.cells = append(rs.cells, s)
+    return s
+}
+
+func roSig[O any](rs *ReactiveSystem) ReadonlySignal[O] {
+	rs.anyDirty = true
+	return ReadonlySignal[O]{state: dirty, rs: rs}
+}
+
+type ReadonlySignal[O any] struct {
+	state state
+	rs    *ReactiveSystem
+	value O
+}
+
+func (s *ReadonlySignal[O]) Value() O {
+    {%- if shouldBeThreadSafe -%}
+    s.rs.mu.Lock()
+    defer s.rs.mu.Unlock()
+    {%- endif -%}
+	if s.rs.anyDirty {
+		s.rs.evalAll()
+	}
+	return s.value
+}
+
+func (s *ReadonlySignal[O]) setDirty() {
+	s.state = dirty
+}
+
+func (s *ReadonlySignal[O]) preEval() (o O, wasClean bool) {
+	if s.state == computing {
+		panic("circular dependency")
+	} else if s.state == clean {
+		return s.value, true
+	}
+
+	s.state = computing
+	return o, false
+}
+
+func (s *ReadonlySignal[O]) postEval(v O) O {
+	s.value = v
+	s.state = clean
+	return v
+}
+
+type SideEffect struct {
+	rs    *ReactiveSystem
+	state state
+}
+
+{%- for i := 0; i < genericParamCount; i++ -%}
+{%- code
+genericCount := i+1
+readonlyPrefix := fmt.Sprintf("ReadonlySignal%d", genericCount)
+// effectPrefix := fmt.Sprintf("SideEffect%d", genericCount)
+genericParamsParts := make([]string,0, genericCount+1)
+for j := 0; j < genericCount; j++ {
+	t := fmt.Sprintf("T%d", j)
+	genericParamsParts = append(genericParamsParts, t)
+}
+genericParams := strings.Join(genericParamsParts, ", ")
+genericParamsComparable := genericParams + " comparable"
+genericParamsWithOutput := genericParams + ", O"
+genericParamsWithOutputComparable := genericParamsWithOutput + " comparable"
+-%}
+
+type {%s readonlyPrefix -%}[{%s genericParamsWithOutputComparable -%}] struct {
+    ReadonlySignal[O]
+    {%- for j := 0; j < genericCount; j++ -%}
+    cell{%d j %} Cell
+    cached{%d j %} T{%d j %}
+    {%- endfor -%}
+    getter func({%s genericParams %}) O
+}
+
+func (s *{%s readonlyPrefix -%}[{%s genericParamsWithOutput -%}]) eval() any {
+    v, wasClean := s.preEval()
+    if wasClean {
+        return v
+    }
+
+    allMatch := true
+    {%- for j := 0; j < genericCount; j++ -%}
+    arg{%d j %} := s.cell{%d j %}.eval().(T{%d j%})
+    if arg{%d j %} != s.cached{%d j %} {
+        allMatch = false
+        s.cached{%d j %} = arg{%d j %}
+    }
+    {%- endfor -%}
+    if allMatch {
+        return s.postEval(s.value)
+    }
+
+    v = s.getter(
+        {%- for j := 0; j < genericCount; j++ -%}
+        arg{%d j %},
+        {%- endfor -%}
+    )
+    return s.postEval(v)
+}
+
+func Computed{%d genericCount -%}[{%s genericParamsWithOutputComparable -%}](
+    rs *ReactiveSystem,
+    {%- for j := 0; j < genericCount; j++ -%}
+    cell{%d j %} Cell,
+    {%- endfor -%}
+    f func({%s genericParams %}) O,
+) *{%s readonlyPrefix -%}[{%s genericParamsWithOutput -%}] {
+    {%- if shouldBeThreadSafe -%}
+    rs.mu.Lock()
+    defer rs.mu.Unlock()
+    {%- endif -%}
+
+    s := &{%s readonlyPrefix -%}[{%s genericParamsWithOutput -%}]{
+        ReadonlySignal: roSig[O](rs),
+        getter:         f,
+        {%- for j := 0; j < genericCount; j++ -%}
+        cell{%d j %}: cell{%d j %},
+        {%- endfor -%}
+    }
+    {%- for j := 0; j < genericCount; j++ -%}
+    s.cached{%d j %} = cell{%d j %}.eval().(T{%d j %})
+    {%- endfor -%}
+    s.value = f(
+        {%- for j := 0; j < genericCount; j++ -%}
+        s.cached{%d j %},
+        {%- endfor -%}
+    )
+    rs.cells = append(rs.cells, s)
+    return s
+}
+
+type SideEffect{%d genericCount -%}[{%s genericParamsComparable -%}] struct {
+    SideEffect
+    fn func({%s genericParams %}) error
+    {%- for j := 0; j < genericCount; j++ -%}
+    cell{%d j %} Cell
+    cached{%d j %} T{%d j %}
+    {%- endfor -%}
+}
+
+func (e *SideEffect{%d genericCount -%}[{%s genericParams -%}]) setDirty() {
+    e.state = dirty
+}
+
+func (e *SideEffect{%d genericCount -%}[{%s genericParams -%}]) eval() any {
+    if e.state == computing {
+        panic("circular dependency")
+    } else if e.state == clean {
+        return nil
+    }
+    e.state = computing
+
+    allMatch := true
+    {%- for j := 0; j < genericCount; j++ -%}
+    arg{%d j %} := e.cell{%d j %}.eval().(T{%d j %})
+    if arg{%d j %} != e.cached{%d j %} {
+        allMatch = false
+        e.cached{%d j %} = arg{%d j %}
+    }
+    {%- endfor -%}
+
+    if allMatch {
+        e.state = clean
+        return nil
+    }
+
+    err := e.fn(
+        {%- for j := 0; j < genericCount; j++ -%}
+        arg{%d j %},
+        {%- endfor -%}
+    )
+    e.state = clean
+    return err
+}
+
+func Effect{%d genericCount -%}[{%s genericParamsComparable -%}](
+    rs *ReactiveSystem,
+    {%- for j := 0; j < genericCount; j++ -%}
+    cell{%d j %} Cell,
+    {%- endfor -%}
+    fn func({%s genericParams %}) error,
+) (stop func()) {
+    {%- if shouldBeThreadSafe -%}
+    rs.mu.Lock()
+    defer rs.mu.Unlock()
+    {%- endif -%}
+
+    e := &SideEffect{%d genericCount -%}[{%s genericParams -%}]{
+        SideEffect: SideEffect{state: dirty, rs: rs},
+        {%- for j := 0; j < genericCount; j++ -%}
+        cell{%d j %}: cell{%d j %},
+        {%- endfor -%}
+        fn: fn,
+    }
+    rs.cells = append(rs.cells, e)
+    rs.anyDirty = true
+    rs.evalAll()
+
+    return func() {
+        {%- if shouldBeThreadSafe -%}
+        rs.mu.Lock()
+        defer rs.mu.Unlock()
+        {%- endif -%}
+        rs.remove(e)
+    }
+}
+{%- endfor -%}
+
+{% endfunc -%}

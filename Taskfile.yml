@@ -1,0 +1,47 @@
+# https://taskfile.dev
+
+version: '3'
+
+interval: 100ms
+
+vars:
+  VERSION: 0.0.1
+
+tasks:
+  tools:
+    cmds:
+      - go install github.com/go-task/task/v3/cmd/task@latest
+      - go install github.com/valyala/quicktemplate/qtc
+      - go get golang.org/x/tools/cmd/goimports
+      - go install golang.org/x/tools/cmd/goimports
+
+  qtc:
+    sources:
+      - "**/*.qtpl"
+    generates:
+      - "**/*.qtpl.go"
+    cmds:
+      - qtc
+
+  codegen:
+    method: none
+    desc: build and run codegen
+    sources:
+      - "cmd/codegen/**/*.go"
+    deps:
+      - qtc
+    cmds:
+      - go mod tidy
+      - go run cmd/codegen/main.go
+      - goimports -w .
+
+  libpub:
+    cmds:
+      - git push origin
+      - git tag v{{.VERSION}}
+      - git push --tags
+      - GOPROXY=proxy.golang.org go list -m github.com/delaneyj/signalparty@v{{.VERSION}}
+
+  default:
+    cmds:
+      - task: codegen

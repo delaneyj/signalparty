@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/delaneyj/signalparty/pkg/reactively"
+	"github.com/delaneyj/signalparty/reactively"
 	"github.com/dustin/go-humanize"
 	"github.com/olekukonko/tablewriter"
 )
