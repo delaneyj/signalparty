@@ -197,16 +197,13 @@ func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
 }
 
 func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
+	if s.lastUpdate == s.sys.currentUpdate {
 		return
 	}
 	s.lastUpdate = s.sys.currentUpdate

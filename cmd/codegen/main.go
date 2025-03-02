@@ -23,7 +23,7 @@ func main() {
 			&cli.BoolFlag{
 				Name:  threadSafeKey,
 				Usage: "Generate thread-safe code",
-				Value: true,
+				Value: false,
 			},
 			&cli.UintFlag{
 				Name:  genericParamCountKey,

@@ -28,7 +28,9 @@ func main() {
 	log.Printf("warming up")
 
 	benchmarkAlien(true)
+	// for i := 0; i < 10; i++ {
 	benchmarkRocket(true)
+	// }
 	benchmarkDumbdumb(true)
 }
 

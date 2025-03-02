@@ -144,9 +144,6 @@ func (s *ReadonlySignal1[T0, O]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
@@ -320,9 +317,6 @@ func (s *ReadonlySignal2[T0, T1, O]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
@@ -528,9 +522,6 @@ func (s *ReadonlySignal3[T0, T1, T2, O]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
@@ -768,9 +759,6 @@ func (s *ReadonlySignal4[T0, T1, T2, T3, O]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
@@ -1040,9 +1028,6 @@ func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
@@ -1344,9 +1329,6 @@ func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
@@ -1680,9 +1662,6 @@ func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
@@ -2048,9 +2027,6 @@ func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) value() any {
 			return s.v
 		}
 		s.v = currentValue
-		for _, sub := range s.subs {
-			sub.markDirty()
-		}
 	}
 
 	return s.v
