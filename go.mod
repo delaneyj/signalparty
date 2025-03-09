@@ -5,8 +5,6 @@ go 1.22.0
 toolchain go1.24.0
 
 require (
-	github.com/cespare/xxhash/v2 v2.2.0
-	github.com/deckarep/golang-set/v2 v2.3.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/jamiealquiza/tachymeter v2.0.0+incompatible
 	github.com/jedib0t/go-pretty/v6 v6.6.6

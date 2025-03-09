@@ -1,11 +1,11 @@
-package rocket_test
+package foo_test
 
 import (
 	"fmt"
 	"testing"
 	"time"
 
-	"github.com/delaneyj/signalparty/rocket"
+	rocket "github.com/delaneyj/signalparty/foo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,66 +32,59 @@ func doubleCount[T int](c T) T {
 
 // from README
 func TestBasicUsage(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
-	count := rocket.Signal(rs, 1)
-	doubleCount := rocket.Computed1(rs, count, func(c int) int {
+	count := rocket.Signal(1)
+	doubleCount := rocket.Computed1(count, func(c int) int {
 		return c * 2
 	})
 
 	callCount := 0
-	rocket.Effect1(rs, count, func(c int) error {
+	rocket.Effect1(count, func(c int) {
 		callCount++
-		return nil
 	})
-	assert.Equal(t, 1, callCount)
+	assert.Equal(t, 0, callCount)
 
 	assert.Equal(t, 2, doubleCount.Value())
 	count.SetValue(2)
 	assert.Equal(t, 4, doubleCount.Value())
+	assert.Equal(t, 1, callCount)
 }
 
 // from README
 func TestBasicEffect(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
-	count := rocket.Signal(rs, 1)
+	count := rocket.Signal(1)
 
 	callCount := 0
-	stop := rocket.Effect1(rs, count, func(c int) error {
+	stop := rocket.Effect1(count, func(c int) {
 		callCount++
-		return nil
 	})
 	// Console: Count in scope: 1
-	assert.Equal(t, 1, callCount)
+	assert.Equal(t, 0, callCount)
 	count.SetValue(2) // Console: Count in scope: 2
-	assert.Equal(t, 2, callCount)
+	assert.Equal(t, 1, callCount)
 
 	stop()
 	count.SetValue(3) // No console output
-	assert.Equal(t, 2, callCount)
+	assert.Equal(t, 1, callCount)
 }
 
 // should clear subscriptions when untracked by all subscribers
 func TestEffectClearSubsWhenUntracked(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
-	a := rocket.Signal(rs, 1)
-	b := rocket.Computed1(rs, a, doubleCount)
-	cRunTimes := 0
-	stopEffect := rocket.Effect1(rs, b, func(b int) error {
-		cRunTimes++
-		return nil
+	a := rocket.Signal(1)
+	b := rocket.Computed1(a, doubleCount)
+	callCount := 0
+	stopEffect := rocket.Effect1(b, func(b int) {
+		callCount++
 	})
 
-	assert.Equal(t, 1, cRunTimes)
+	assert.Equal(t, 0, callCount)
 	a.SetValue(2)
-	assert.Equal(t, 2, cRunTimes)
+	assert.Equal(t, 1, callCount)
 	stopEffect()
 	a.SetValue(3)
-	assert.Equal(t, 2, cRunTimes)
+	assert.Equal(t, 1, callCount)
 }
 
 func TestTopologyDropAbaUpdates(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
-
 	//     A
 	//   / |
 	//  B  | <- Looks like a flag doesn't it? :D
@@ -99,11 +92,11 @@ func TestTopologyDropAbaUpdates(t *testing.T) {
 	//     C
 	//     |
 	//     D
-	a := rocket.Signal(rs, 2)
-	b := rocket.Computed1(rs, a, subOne)
-	c := rocket.Computed2(rs, a, b, sumTwo)
+	a := rocket.Signal(2)
+	b := rocket.Computed1(a, subOne)
+	c := rocket.Computed2(a, b, sumTwo)
 	callCount := 0
-	d := rocket.Computed1(rs, c, func(c int) string {
+	d := rocket.Computed1(c, func(c int) string {
 		callCount++
 		return string(fmt.Sprintf("d: %d", c))
 	})
@@ -119,8 +112,6 @@ func TestTopologyDropAbaUpdates(t *testing.T) {
 }
 
 func TestShouldOnlyUpdateEverySignalOnceDiamond(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
-
 	// In this scenario "D" should only update once when "A" receives
 	// an update. This is sometimes referred to as the "diamond" scenario.
 	//     A
@@ -129,12 +120,12 @@ func TestShouldOnlyUpdateEverySignalOnceDiamond(t *testing.T) {
 	//   \   /
 	//     D
 
-	a := rocket.Signal(rs, "a")
-	b := rocket.Computed1[string](rs, a, identity)
-	c := rocket.Computed1[string](rs, a, identity)
+	a := rocket.Signal("a")
+	b := rocket.Computed1[string](a, identity)
+	c := rocket.Computed1[string](a, identity)
 
 	callCount := 0
-	d := rocket.Computed2(rs, b, c, func(b, c string) string {
+	d := rocket.Computed2(b, c, func(b, c string) string {
 		callCount++
 		return b + " " + c
 	})
@@ -149,8 +140,6 @@ func TestShouldOnlyUpdateEverySignalOnceDiamond(t *testing.T) {
 }
 
 func TestShouldOnlyUpdateEverySignalOnceDiamondTail(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
-
 	// "E" will be likely updated twice if our mark+sweep logic is buggy.
 	//     A
 	//   /   \
@@ -160,13 +149,13 @@ func TestShouldOnlyUpdateEverySignalOnceDiamondTail(t *testing.T) {
 	//     |
 	//     E
 
-	a := rocket.Signal(rs, "a")
-	b := rocket.Computed1[string](rs, a, identity)
-	c := rocket.Computed1[string](rs, a, identity)
-	d := rocket.Computed2(rs, b, c, joinStrings)
+	a := rocket.Signal("a")
+	b := rocket.Computed1[string](a, identity)
+	c := rocket.Computed1[string](a, identity)
+	d := rocket.Computed2(b, c, joinStrings)
 
 	eCallCount := 0
-	e := rocket.Computed1(rs, d, func(d string) string {
+	e := rocket.Computed1(d, func(d string) string {
 		eCallCount++
 		return d
 	})
@@ -180,17 +169,15 @@ func TestShouldOnlyUpdateEverySignalOnceDiamondTail(t *testing.T) {
 }
 
 func TestBailOutIfResultIsTheSame(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
-
 	// Bail out if value of "B" never changes
 	// A->B->C
-	a := rocket.Signal(rs, "a")
-	b := rocket.Computed1(rs, a, func(a string) string {
+	a := rocket.Signal("a")
+	b := rocket.Computed1(a, func(a string) string {
 		return "foo"
 	})
 
 	callCount := 0
-	c := rocket.Computed1(rs, b, func(b string) string {
+	c := rocket.Computed1(b, func(b string) string {
 		callCount++
 		return b
 	})
@@ -204,8 +191,6 @@ func TestBailOutIfResultIsTheSame(t *testing.T) {
 }
 
 func TestShouldOnlyUpdateEverySignalOnceJaggedDiamondTails(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
-
 	// "F" and "G" will be likely updated twice if our mark+sweep logic is buggy.
 	//     A
 	//   /   \
@@ -217,13 +202,13 @@ func TestShouldOnlyUpdateEverySignalOnceJaggedDiamondTails(t *testing.T) {
 	//   /   \
 	//  F     G
 
-	a := rocket.Signal(rs, "a")
-	b := rocket.Computed1[string](rs, a, identity)
-	c := rocket.Computed1[string](rs, a, identity)
-	d := rocket.Computed1[string](rs, c, identity)
+	a := rocket.Signal("a")
+	b := rocket.Computed1[string](a, identity)
+	c := rocket.Computed1[string](a, identity)
+	d := rocket.Computed1[string](c, identity)
 
 	eCallCount, eTime := 0, time.Time{}
-	e := rocket.Computed2(rs, b, d, func(bV, dV string) string {
+	e := rocket.Computed2(b, d, func(bV, dV string) string {
 		eV := bV + " " + dV
 		eCallCount++
 		eTime = time.Now()
@@ -231,14 +216,14 @@ func TestShouldOnlyUpdateEverySignalOnceJaggedDiamondTails(t *testing.T) {
 	})
 
 	fCallCount, fTime := 0, time.Time{}
-	f := rocket.Computed1(rs, e, func(ev string) string {
+	f := rocket.Computed1(e, func(ev string) string {
 		fCallCount++
 		fTime = time.Now()
 		return ev
 	})
 
 	gCallCount, gTime := 0, time.Time{}
-	g := rocket.Computed1(rs, e, func(ev string) string {
+	g := rocket.Computed1(e, func(ev string) string {
 		gCallCount++
 		gTime = time.Now()
 		return ev
@@ -284,16 +269,15 @@ func TestShouldEnsureSubsUpdate(t *testing.T) {
 	//  B     *C <- returns same value every time
 	//   \   /
 	//     D
-	rs := rocket.NewReactiveSystem()
-	a := rocket.Signal(rs, "a")
-	b := rocket.Computed1(rs, a, func(a string) string {
+	a := rocket.Signal("a")
+	b := rocket.Computed1(a, func(a string) string {
 		return a
 	})
-	c := rocket.Computed1(rs, a, func(a string) string {
+	c := rocket.Computed1(a, func(a string) string {
 		return "c"
 	})
 	dCallCount := 0
-	d := rocket.Computed2(rs, b, c, func(b, c string) string {
+	d := rocket.Computed2(b, c, func(b, c string) string {
 		dCallCount++
 		return b + " " + c
 	})
@@ -314,17 +298,16 @@ func TestShouldEnsureSubsUpdateEvenIfTwoDepsUnmarkIt(t *testing.T) {
 	//  B *C *D
 	//   \ | /
 	//     E
-	rs := rocket.NewReactiveSystem()
-	a := rocket.Signal(rs, "a")
-	b := rocket.Computed1[string](rs, a, identity)
-	c := rocket.Computed1(rs, a, func(a string) string {
+	a := rocket.Signal("a")
+	b := rocket.Computed1[string](a, identity)
+	c := rocket.Computed1(a, func(a string) string {
 		return "c"
 	})
-	d := rocket.Computed1(rs, a, func(a string) string {
+	d := rocket.Computed1(a, func(a string) string {
 		return "d"
 	})
 	eCallCount := 0
-	e := rocket.Computed3(rs, b, c, d, func(b, c, d string) string {
+	e := rocket.Computed3(b, c, d, func(b, c, d string) string {
 		eCallCount++
 		return b + " " + c + " " + d
 	})
@@ -345,16 +328,15 @@ func TestShouldEnsureSubsUpdateEvenIfAllDepsUnmarkIt(t *testing.T) {
 	// *B     *C
 	//   \   /
 	//     D
-	rs := rocket.NewReactiveSystem()
-	a := rocket.Signal(rs, "a")
-	b := rocket.Computed1(rs, a, func(a string) string {
+	a := rocket.Signal("a")
+	b := rocket.Computed1(a, func(a string) string {
 		return "b"
 	})
-	c := rocket.Computed1(rs, a, func(a string) string {
+	c := rocket.Computed1(a, func(a string) string {
 		return "c"
 	})
 	dCallCount := 0
-	d := rocket.Computed2(rs, b, c, func(b, c string) string {
+	d := rocket.Computed2(b, c, func(b, c string) string {
 		dCallCount++
 		return b + " " + c
 	})
@@ -372,12 +354,11 @@ func fail[T any](a T) T {
 }
 
 func TestShouldKeepGraphConsistentOnActivationErrors(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
 
-	a := rocket.Signal(rs, 0)
+	a := rocket.Signal(0)
 
 	assert.Panics(t, func() {
-		rocket.Computed1[int](rs, a, fail).Value()
+		rocket.Computed1[int](a, fail).Value()
 	})
 
 	a.SetValue(1)
@@ -385,14 +366,13 @@ func TestShouldKeepGraphConsistentOnActivationErrors(t *testing.T) {
 }
 
 func TestShouldKeepGraphConsistentOnComputedErrors(t *testing.T) {
-	rs := rocket.NewReactiveSystem()
 
-	a := rocket.Signal(rs, 0)
+	a := rocket.Signal(0)
 
-	c := rocket.Computed1[int](rs, a, identity)
+	c := rocket.Computed1[int](a, identity)
 
 	assert.Panics(t, func() {
-		rocket.Computed1[int](rs, a, fail).Value()
+		rocket.Computed1[int](a, fail).Value()
 	})
 
 	a.SetValue(1)

@@ -12,67 +12,73 @@ import "sync"
 
 type ReactiveSystem struct {
 	{%- if shouldBeThreadSafe -%}
-	mu *sync.Mutex
+	mu sync.RWMutex
 	{%- endif -%}
-	currentUpdate uint32
 }
 
 func NewReactiveSystem() *ReactiveSystem {
-	rs := &ReactiveSystem{
+	return &ReactiveSystem{
 		{%- if shouldBeThreadSafe -%}
-		mu: &sync.Mutex{},
+		mu: sync.RWMutex{},
 		{%- endif -%}
-		currentUpdate: 0,
 	}
-	return rs
 }
 
-type Cell interface {
-	value() any
+type Subscriber interface {
 	markDirty()
-	addSubs(...Cell)
-	removeSub(Cell)
+}
+
+type Dependency interface {
+	value() any
+	version() uint32
+	addSubs(...Subscriber)
+	removeSub(Subscriber)
 }
 
 type WriteableSignal[T comparable] struct {
-	v T
-	sys *ReactiveSystem
-	subs []Cell
+	rs  *ReactiveSystem
+	val T
+	subs []Subscriber
+	ver uint32
 }
 
 
 func (s *WriteableSignal[T]) Value() T {
 	{%- if shouldBeThreadSafe -%}
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.RLock()
+	defer s.rs.mu.RUnlock()
 	{%- endif -%}
-	return s.v
+	return s.val
 }
 
 func (s *WriteableSignal[T]) value() any {
-	return s.v
+	return s.val
+}
+
+func (s *WriteableSignal[T]) version() uint32 {
+	return s.ver
 }
 
 func (s *WriteableSignal[T]) SetValue(value T) {
 	{%- if shouldBeThreadSafe -%}
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 	{%- endif -%}
 
-	if s.v == value {
+	if s.val == value {
 		return
 	}
-	s.v = value
+	s.val = value
 
 	if len(s.subs) == 0 {
 		return
 	}
-	s.sys.currentUpdate++
+	s.ver++
 	s.markDirty()
 }
 
-func Signal[T comparable](sys *ReactiveSystem, value T) *WriteableSignal[T] {
-	s := &WriteableSignal[T]{v: value, sys: sys}
+func Signal[T comparable](rs *ReactiveSystem, value T) *WriteableSignal[T] {
+	s := &WriteableSignal[T]{rs:rs,val: value, ver: 1}
 	return s
 }
 
@@ -83,13 +89,13 @@ func (s *WriteableSignal[T]) markDirty() {
 	}
 }
 
-func (s *WriteableSignal[T]) addSubs(sub ...Cell) {
+func (s *WriteableSignal[T]) addSubs(sub ...Subscriber) {
 	s.subs = append(s.subs, sub...)
 }
 
-func (s *WriteableSignal[T]) removeSub(cell Cell) {
+func (s *WriteableSignal[T]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cell {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -120,54 +126,54 @@ type {%s readonlyPrefix %}Args[{%s genericParamsComparable %} ] struct {
 }
 
 type {%s readonlyPrefix %}[{%s genericParamsWithOutputComparable %}] struct {
-	sys *ReactiveSystem
-	subs []Cell
+	rs *ReactiveSystem
+	subs []Subscriber
 	isDirty bool
-	lastUpdate uint32
+	ver uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get func({%s genericParams %}) O
 	{%- for i := 0; i < genericCount; i++ -%}
-	cell{%d i %} Cell
-	cached{%d i %} T{%d i %}
+	dep{%d i %} Dependency
 	{%- endfor -%}
-	v            O
+	val            O
 }
 
 func Computed{%d i+1 %}[{%s genericParamsWithOutputComparable %}](
-	sys *ReactiveSystem,
+	rs *ReactiveSystem,
 	{%- for i := 0; i < genericCount; i++ -%}
-	arg{%d i %} Cell,
+	dep{%d i %} Dependency,
 	{%- endfor -%}
 	get {%s readonlyPrefix %}Func[{%s genericParamsWithOutput %}],
 ) *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}] {
 	{%- if shouldBeThreadSafe -%}
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 	{%- endif -%}
 
 	s := &{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]{
 		isDirty: true,
-		sys:   sys,
 		get:   get,
+		ver: 1,
+		versionSum: 0,
 		{% for i := 0; i < genericCount; i++ -%}
-		cell{%d i %}: arg{%d i %},
+		dep{%d i %}: dep{%d i %},
 		{%- endfor %}
 	}
 	{%- for i := 0; i < genericCount; i++ -%}
-	arg{%d i %}.addSubs(s)
-	s.cached{%d i %} = arg{%d i %}.value().(T{%d i %})
+	dep{%d i %}.addSubs(s)
 	{%- endfor -%}
-	s.v = s.get(
+	{% comment %} s.val = s.get(
 		{%- for i := 0; i < genericCount; i++ -%}
-		s.cached{%d i %},
+		arg{%d i %}.value().(T{%d i %}),
 		{%- endfor -%}
-	)
+	) {% endcomment %}
 	return s
 }
 
 func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) Value() O {
 	{%- if shouldBeThreadSafe -%}
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 	{%- endif -%}
 
 	return s.value().(O)
@@ -175,51 +181,52 @@ func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) Value() O {
 
 func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
+	var allArgsSum uint32
 	{%- for i := 0; i < genericCount; i++ -%}
-	depValue{%d i %} := s.cell{%d i %}.value().(T{%d i %})
-	if s.cached{%d i %} != depValue{%d i %} {
-		allArgsMatch = false
-	}
+	depValue{%d i %} := s.dep{%d i %}.value().(T{%d i %})
+	depVersion{%d i %} := s.dep{%d i %}.version()
+	allArgsSum += depVersion{%d i %}
 	{%- endfor -%}
-
-	if !allArgsMatch {
-		currentValue := s.get(
-			{%- for i := 0; i < genericCount; i++ -%}
-			depValue{%d i %},
-			{%- endfor -%}
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	return s.v
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		{%- for i := 0; i < genericCount; i++ -%}
+		depValue{%d i %},
+		{%- endfor -%}
+	)
+	if s.val == currentValue {
+		return s.val
+	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
+
+func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) version() uint32 {
+	return s.ver
 }
 
 func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) markDirty() {
-	if s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) removeSub(cells Cell) {
+func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -227,88 +234,75 @@ func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) removeSub(cells 
 }
 
 type {%s effectPrefix %}[{%s genericParamsComparable %}] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs *ReactiveSystem
+	versionSum uint32
 	fn         func({%s genericParams %}) error
 	{%- for i := 0; i < genericCount; i++ -%}
-	cell{%d i %} Cell
-	cached{%d i %} T{%d i %}
+	dep{%d i %} Dependency
 	{%- endfor -%}
 }
 
 func Effect{%d i+1%}[{%s genericParamsComparable %}](
-	sys *ReactiveSystem,
+	rs *ReactiveSystem,
 	{%- for i := 0; i < genericCount; i++ -%}
-	arg{%d i %} Cell,
+	dep{%d i %} Dependency,
 	{%- endfor -%}
 	fn func({%s genericParams %}) error,
 )  (stop func()) {
 	{%- if shouldBeThreadSafe -%}
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 	{%- endif -%}
 
 	s := &{%s effectPrefix %}[{%s genericParams %}]{
-		system: sys,
 		fn:     fn,
-		lastUpdate: 0,
+		versionSum: 0,
 		{%- for i := 0; i < genericCount; i++ -%}
-		cell{%d i %}: arg{%d i %},
+		dep{%d i %}: dep{%d i %},
 		{%- endfor -%}
 	}
 	{%- for i := 0; i < genericCount; i++ -%}
-	arg{%d i %}.addSubs(s)
-	s.cached{%d i %} = arg{%d i %}.value().(T{%d i %})
+	dep{%d i %}.addSubs(s)
 	{%- endfor -%}
+
 	s.fn(
 		{%- for i := 0; i < genericCount; i++ -%}
-		s.cached{%d i %},
+		dep{%d i %}.value().(T{%d i %}),
 		{%- endfor -%}
 	)
 
 	return func(){
 		{%- for i := 0; i < genericCount; i++ -%}
-		arg{%d i %}.removeSub(s)
+		dep{%d i %}.removeSub(s)
 		{%- endfor -%}
 	}
 }
 
 func (s *{%s effectPrefix %}[{%s genericParams %}]) value() any {
+	var allArgsSum uint32
+
 	{%- for i := 0; i < genericCount; i++ -%}
-	current{%d i %}, ok := s.cell{%d i %}.value().(T{%d i %})
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached{%d i %} == current{%d i %} {
+	current{%d i %} := s.dep{%d i %}.value().(T{%d i %})
+	currentVersion{%d i %} := s.dep{%d i %}.version()
+	allArgsSum += currentVersion{%d i %}
+
+	{%- endfor -%}
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached{%d i %} = current{%d i %}
-	{%- endfor -%}
 	s.fn(
 		{%- for i := 0; i < genericCount; i++ -%}
-		s.cached{%d i %},
+		current{%d i %},
 		{%- endfor -%}
 	)
 	return nil
 }
 
 func (s *{%s effectPrefix %}[{%s genericParams %}]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *{%s effectPrefix %}[{%s genericParams %}]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *{%s effectPrefix %}[{%s genericParams %}]) removeSub(sub Cell) {
-	{%- for i := 0; i < genericCount; i++ -%}
-	s.cell{%d i %} = nil
-	{%- endfor -%}
 }
 
 

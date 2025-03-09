@@ -3,59 +3,65 @@ package rocket
 import "sync"
 
 type ReactiveSystem struct {
-	mu            *sync.Mutex
-	currentUpdate uint32
+	mu sync.RWMutex
 }
 
 func NewReactiveSystem() *ReactiveSystem {
-	rs := &ReactiveSystem{
-		mu:            &sync.Mutex{},
-		currentUpdate: 0,
+	return &ReactiveSystem{
+		mu: sync.RWMutex{},
 	}
-	return rs
 }
 
-type Cell interface {
-	value() any
+type Subscriber interface {
 	markDirty()
-	addSubs(...Cell)
-	removeSub(Cell)
+}
+
+type Dependency interface {
+	value() any
+	version() uint32
+	addSubs(...Subscriber)
+	removeSub(Subscriber)
 }
 
 type WriteableSignal[T comparable] struct {
-	v    T
-	sys  *ReactiveSystem
-	subs []Cell
+	rs   *ReactiveSystem
+	val  T
+	subs []Subscriber
+	ver  uint32
 }
 
 func (s *WriteableSignal[T]) Value() T {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
-	return s.v
+	s.rs.mu.RLock()
+	defer s.rs.mu.RUnlock()
+	return s.val
 }
 
 func (s *WriteableSignal[T]) value() any {
-	return s.v
+	return s.val
+}
+
+func (s *WriteableSignal[T]) version() uint32 {
+	return s.ver
 }
 
 func (s *WriteableSignal[T]) SetValue(value T) {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
-	if s.v == value {
+	if s.val == value {
 		return
 	}
-	s.v = value
+	s.val = value
 
 	if len(s.subs) == 0 {
 		return
 	}
-	s.sys.currentUpdate++
+	s.ver++
 	s.markDirty()
 }
 
-func Signal[T comparable](sys *ReactiveSystem, value T) *WriteableSignal[T] {
-	s := &WriteableSignal[T]{v: value, sys: sys}
+func Signal[T comparable](rs *ReactiveSystem, value T) *WriteableSignal[T] {
+	s := &WriteableSignal[T]{rs: rs, val: value, ver: 1}
 	return s
 }
 
@@ -65,13 +71,13 @@ func (s *WriteableSignal[T]) markDirty() {
 	}
 }
 
-func (s *WriteableSignal[T]) addSubs(sub ...Cell) {
+func (s *WriteableSignal[T]) addSubs(sub ...Subscriber) {
 	s.subs = append(s.subs, sub...)
 }
 
-func (s *WriteableSignal[T]) removeSub(cell Cell) {
+func (s *WriteableSignal[T]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cell {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -85,88 +91,87 @@ type ReadonlySignal1Args[T0 comparable] struct {
 }
 
 type ReadonlySignal1[T0, O comparable] struct {
-	sys        *ReactiveSystem
-	subs       []Cell
+	rs         *ReactiveSystem
+	subs       []Subscriber
 	isDirty    bool
-	lastUpdate uint32
+	ver        uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get        func(T0) O
-	cell0      Cell
-	cached0    T0
-	v          O
+	dep0       Dependency
+	val        O
 }
 
 func Computed1[T0, O comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
 	get ReadonlySignal1Func[T0, O],
 ) *ReadonlySignal1[T0, O] {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &ReadonlySignal1[T0, O]{
-		isDirty: true,
-		sys:     sys,
-		get:     get,
-		cell0:   arg0,
+		isDirty:    true,
+		get:        get,
+		ver:        1,
+		versionSum: 0,
+		dep0:       dep0,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	s.v = s.get(
-		s.cached0,
-	)
+	dep0.addSubs(s)
+
 	return s
 }
 
 func (s *ReadonlySignal1[T0, O]) Value() O {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
 	return s.value().(O)
 }
 
 func (s *ReadonlySignal1[T0, O]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
-	depValue0 := s.cell0.value().(T0)
-	if s.cached0 != depValue0 {
-		allArgsMatch = false
+	var allArgsSum uint32
+	depValue0 := s.dep0.value().(T0)
+	depVersion0 := s.dep0.version()
+	allArgsSum += depVersion0
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	if !allArgsMatch {
-		currentValue := s.get(
-			depValue0,
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		depValue0,
+	)
+	if s.val == currentValue {
+		return s.val
 	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
 
-	return s.v
+func (s *ReadonlySignal1[T0, O]) version() uint32 {
+	return s.ver
 }
 
 func (s *ReadonlySignal1[T0, O]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *ReadonlySignal1[T0, O]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *ReadonlySignal1[T0, O]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *ReadonlySignal1[T0, O]) removeSub(cells Cell) {
+func (s *ReadonlySignal1[T0, O]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -174,68 +179,56 @@ func (s *ReadonlySignal1[T0, O]) removeSub(cells Cell) {
 }
 
 type SideEffect1[T0 comparable] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs         *ReactiveSystem
+	versionSum uint32
 	fn         func(T0) error
-	cell0      Cell
-	cached0    T0
+	dep0       Dependency
 }
 
 func Effect1[T0 comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
 	fn func(T0) error,
 ) (stop func()) {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect1[T0]{
-		system:     sys,
 		fn:         fn,
-		lastUpdate: 0,
-		cell0:      arg0,
+		versionSum: 0,
+		dep0:       dep0,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
+	dep0.addSubs(s)
+
 	s.fn(
-		s.cached0,
+		dep0.value().(T0),
 	)
 
 	return func() {
-		arg0.removeSub(s)
+		dep0.removeSub(s)
 	}
 }
 
 func (s *SideEffect1[T0]) value() any {
-	current0, ok := s.cell0.value().(T0)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached0 == current0 {
+	var allArgsSum uint32
+
+	current0 := s.dep0.value().(T0)
+	currentVersion0 := s.dep0.version()
+	allArgsSum += currentVersion0
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached0 = current0
 	s.fn(
-		s.cached0,
+		current0,
 	)
 	return nil
 }
 
 func (s *SideEffect1[T0]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *SideEffect1[T0]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *SideEffect1[T0]) removeSub(sub Cell) {
-	s.cell0 = nil
 }
 
 type ReadonlySignal2Func[T0, T1, O comparable] func(T0, T1) O
@@ -246,100 +239,95 @@ type ReadonlySignal2Args[T0, T1 comparable] struct {
 }
 
 type ReadonlySignal2[T0, T1, O comparable] struct {
-	sys        *ReactiveSystem
-	subs       []Cell
+	rs         *ReactiveSystem
+	subs       []Subscriber
 	isDirty    bool
-	lastUpdate uint32
+	ver        uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get        func(T0, T1) O
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	v          O
+	dep0       Dependency
+	dep1       Dependency
+	val        O
 }
 
 func Computed2[T0, T1, O comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
 	get ReadonlySignal2Func[T0, T1, O],
 ) *ReadonlySignal2[T0, T1, O] {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &ReadonlySignal2[T0, T1, O]{
-		isDirty: true,
-		sys:     sys,
-		get:     get,
-		cell0:   arg0,
-		cell1:   arg1,
+		isDirty:    true,
+		get:        get,
+		ver:        1,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	s.v = s.get(
-		s.cached0,
-		s.cached1,
-	)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+
 	return s
 }
 
 func (s *ReadonlySignal2[T0, T1, O]) Value() O {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
 	return s.value().(O)
 }
 
 func (s *ReadonlySignal2[T0, T1, O]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
-	depValue0 := s.cell0.value().(T0)
-	if s.cached0 != depValue0 {
-		allArgsMatch = false
-	}
-	depValue1 := s.cell1.value().(T1)
-	if s.cached1 != depValue1 {
-		allArgsMatch = false
-	}
-
-	if !allArgsMatch {
-		currentValue := s.get(
-			depValue0,
-			depValue1,
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	var allArgsSum uint32
+	depValue0 := s.dep0.value().(T0)
+	depVersion0 := s.dep0.version()
+	allArgsSum += depVersion0
+	depValue1 := s.dep1.value().(T1)
+	depVersion1 := s.dep1.version()
+	allArgsSum += depVersion1
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	return s.v
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		depValue0,
+		depValue1,
+	)
+	if s.val == currentValue {
+		return s.val
+	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
+
+func (s *ReadonlySignal2[T0, T1, O]) version() uint32 {
+	return s.ver
 }
 
 func (s *ReadonlySignal2[T0, T1, O]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *ReadonlySignal2[T0, T1, O]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *ReadonlySignal2[T0, T1, O]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *ReadonlySignal2[T0, T1, O]) removeSub(cells Cell) {
+func (s *ReadonlySignal2[T0, T1, O]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -347,87 +335,67 @@ func (s *ReadonlySignal2[T0, T1, O]) removeSub(cells Cell) {
 }
 
 type SideEffect2[T0, T1 comparable] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs         *ReactiveSystem
+	versionSum uint32
 	fn         func(T0, T1) error
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
+	dep0       Dependency
+	dep1       Dependency
 }
 
 func Effect2[T0, T1 comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
 	fn func(T0, T1) error,
 ) (stop func()) {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect2[T0, T1]{
-		system:     sys,
 		fn:         fn,
-		lastUpdate: 0,
-		cell0:      arg0,
-		cell1:      arg1,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+
 	s.fn(
-		s.cached0,
-		s.cached1,
+		dep0.value().(T0),
+		dep1.value().(T1),
 	)
 
 	return func() {
-		arg0.removeSub(s)
-		arg1.removeSub(s)
+		dep0.removeSub(s)
+		dep1.removeSub(s)
 	}
 }
 
 func (s *SideEffect2[T0, T1]) value() any {
-	current0, ok := s.cell0.value().(T0)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached0 == current0 {
+	var allArgsSum uint32
+
+	current0 := s.dep0.value().(T0)
+	currentVersion0 := s.dep0.version()
+	allArgsSum += currentVersion0
+
+	current1 := s.dep1.value().(T1)
+	currentVersion1 := s.dep1.version()
+	allArgsSum += currentVersion1
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached0 = current0
-	current1, ok := s.cell1.value().(T1)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached1 == current1 {
-		return nil
-	}
-
-	s.cached1 = current1
 	s.fn(
-		s.cached0,
-		s.cached1,
+		current0,
+		current1,
 	)
 	return nil
 }
 
 func (s *SideEffect2[T0, T1]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *SideEffect2[T0, T1]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *SideEffect2[T0, T1]) removeSub(sub Cell) {
-	s.cell0 = nil
-	s.cell1 = nil
 }
 
 type ReadonlySignal3Func[T0, T1, T2, O comparable] func(T0, T1, T2) O
@@ -439,112 +407,103 @@ type ReadonlySignal3Args[T0, T1, T2 comparable] struct {
 }
 
 type ReadonlySignal3[T0, T1, T2, O comparable] struct {
-	sys        *ReactiveSystem
-	subs       []Cell
+	rs         *ReactiveSystem
+	subs       []Subscriber
 	isDirty    bool
-	lastUpdate uint32
+	ver        uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get        func(T0, T1, T2) O
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	v          O
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	val        O
 }
 
 func Computed3[T0, T1, T2, O comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
 	get ReadonlySignal3Func[T0, T1, T2, O],
 ) *ReadonlySignal3[T0, T1, T2, O] {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &ReadonlySignal3[T0, T1, T2, O]{
-		isDirty: true,
-		sys:     sys,
-		get:     get,
-		cell0:   arg0,
-		cell1:   arg1,
-		cell2:   arg2,
+		isDirty:    true,
+		get:        get,
+		ver:        1,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	s.v = s.get(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-	)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+
 	return s
 }
 
 func (s *ReadonlySignal3[T0, T1, T2, O]) Value() O {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
 	return s.value().(O)
 }
 
 func (s *ReadonlySignal3[T0, T1, T2, O]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
-	depValue0 := s.cell0.value().(T0)
-	if s.cached0 != depValue0 {
-		allArgsMatch = false
-	}
-	depValue1 := s.cell1.value().(T1)
-	if s.cached1 != depValue1 {
-		allArgsMatch = false
-	}
-	depValue2 := s.cell2.value().(T2)
-	if s.cached2 != depValue2 {
-		allArgsMatch = false
-	}
-
-	if !allArgsMatch {
-		currentValue := s.get(
-			depValue0,
-			depValue1,
-			depValue2,
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	var allArgsSum uint32
+	depValue0 := s.dep0.value().(T0)
+	depVersion0 := s.dep0.version()
+	allArgsSum += depVersion0
+	depValue1 := s.dep1.value().(T1)
+	depVersion1 := s.dep1.version()
+	allArgsSum += depVersion1
+	depValue2 := s.dep2.value().(T2)
+	depVersion2 := s.dep2.version()
+	allArgsSum += depVersion2
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	return s.v
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		depValue0,
+		depValue1,
+		depValue2,
+	)
+	if s.val == currentValue {
+		return s.val
+	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
+
+func (s *ReadonlySignal3[T0, T1, T2, O]) version() uint32 {
+	return s.ver
 }
 
 func (s *ReadonlySignal3[T0, T1, T2, O]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *ReadonlySignal3[T0, T1, T2, O]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *ReadonlySignal3[T0, T1, T2, O]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *ReadonlySignal3[T0, T1, T2, O]) removeSub(cells Cell) {
+func (s *ReadonlySignal3[T0, T1, T2, O]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -552,106 +511,78 @@ func (s *ReadonlySignal3[T0, T1, T2, O]) removeSub(cells Cell) {
 }
 
 type SideEffect3[T0, T1, T2 comparable] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs         *ReactiveSystem
+	versionSum uint32
 	fn         func(T0, T1, T2) error
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
 }
 
 func Effect3[T0, T1, T2 comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
 	fn func(T0, T1, T2) error,
 ) (stop func()) {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect3[T0, T1, T2]{
-		system:     sys,
 		fn:         fn,
-		lastUpdate: 0,
-		cell0:      arg0,
-		cell1:      arg1,
-		cell2:      arg2,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
+		dep0.value().(T0),
+		dep1.value().(T1),
+		dep2.value().(T2),
 	)
 
 	return func() {
-		arg0.removeSub(s)
-		arg1.removeSub(s)
-		arg2.removeSub(s)
+		dep0.removeSub(s)
+		dep1.removeSub(s)
+		dep2.removeSub(s)
 	}
 }
 
 func (s *SideEffect3[T0, T1, T2]) value() any {
-	current0, ok := s.cell0.value().(T0)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached0 == current0 {
+	var allArgsSum uint32
+
+	current0 := s.dep0.value().(T0)
+	currentVersion0 := s.dep0.version()
+	allArgsSum += currentVersion0
+
+	current1 := s.dep1.value().(T1)
+	currentVersion1 := s.dep1.version()
+	allArgsSum += currentVersion1
+
+	current2 := s.dep2.value().(T2)
+	currentVersion2 := s.dep2.version()
+	allArgsSum += currentVersion2
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached0 = current0
-	current1, ok := s.cell1.value().(T1)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached1 == current1 {
-		return nil
-	}
-
-	s.cached1 = current1
-	current2, ok := s.cell2.value().(T2)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached2 == current2 {
-		return nil
-	}
-
-	s.cached2 = current2
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
+		current0,
+		current1,
+		current2,
 	)
 	return nil
 }
 
 func (s *SideEffect3[T0, T1, T2]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *SideEffect3[T0, T1, T2]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *SideEffect3[T0, T1, T2]) removeSub(sub Cell) {
-	s.cell0 = nil
-	s.cell1 = nil
-	s.cell2 = nil
 }
 
 type ReadonlySignal4Func[T0, T1, T2, T3, O comparable] func(T0, T1, T2, T3) O
@@ -664,124 +595,111 @@ type ReadonlySignal4Args[T0, T1, T2, T3 comparable] struct {
 }
 
 type ReadonlySignal4[T0, T1, T2, T3, O comparable] struct {
-	sys        *ReactiveSystem
-	subs       []Cell
+	rs         *ReactiveSystem
+	subs       []Subscriber
 	isDirty    bool
-	lastUpdate uint32
+	ver        uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get        func(T0, T1, T2, T3) O
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	v          O
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	val        O
 }
 
 func Computed4[T0, T1, T2, T3, O comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
 	get ReadonlySignal4Func[T0, T1, T2, T3, O],
 ) *ReadonlySignal4[T0, T1, T2, T3, O] {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &ReadonlySignal4[T0, T1, T2, T3, O]{
-		isDirty: true,
-		sys:     sys,
-		get:     get,
-		cell0:   arg0,
-		cell1:   arg1,
-		cell2:   arg2,
-		cell3:   arg3,
+		isDirty:    true,
+		get:        get,
+		ver:        1,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	s.v = s.get(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-	)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+
 	return s
 }
 
 func (s *ReadonlySignal4[T0, T1, T2, T3, O]) Value() O {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
 	return s.value().(O)
 }
 
 func (s *ReadonlySignal4[T0, T1, T2, T3, O]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
-	depValue0 := s.cell0.value().(T0)
-	if s.cached0 != depValue0 {
-		allArgsMatch = false
-	}
-	depValue1 := s.cell1.value().(T1)
-	if s.cached1 != depValue1 {
-		allArgsMatch = false
-	}
-	depValue2 := s.cell2.value().(T2)
-	if s.cached2 != depValue2 {
-		allArgsMatch = false
-	}
-	depValue3 := s.cell3.value().(T3)
-	if s.cached3 != depValue3 {
-		allArgsMatch = false
-	}
-
-	if !allArgsMatch {
-		currentValue := s.get(
-			depValue0,
-			depValue1,
-			depValue2,
-			depValue3,
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	var allArgsSum uint32
+	depValue0 := s.dep0.value().(T0)
+	depVersion0 := s.dep0.version()
+	allArgsSum += depVersion0
+	depValue1 := s.dep1.value().(T1)
+	depVersion1 := s.dep1.version()
+	allArgsSum += depVersion1
+	depValue2 := s.dep2.value().(T2)
+	depVersion2 := s.dep2.version()
+	allArgsSum += depVersion2
+	depValue3 := s.dep3.value().(T3)
+	depVersion3 := s.dep3.version()
+	allArgsSum += depVersion3
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	return s.v
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		depValue0,
+		depValue1,
+		depValue2,
+		depValue3,
+	)
+	if s.val == currentValue {
+		return s.val
+	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
+
+func (s *ReadonlySignal4[T0, T1, T2, T3, O]) version() uint32 {
+	return s.ver
 }
 
 func (s *ReadonlySignal4[T0, T1, T2, T3, O]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *ReadonlySignal4[T0, T1, T2, T3, O]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *ReadonlySignal4[T0, T1, T2, T3, O]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *ReadonlySignal4[T0, T1, T2, T3, O]) removeSub(cells Cell) {
+func (s *ReadonlySignal4[T0, T1, T2, T3, O]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -789,125 +707,89 @@ func (s *ReadonlySignal4[T0, T1, T2, T3, O]) removeSub(cells Cell) {
 }
 
 type SideEffect4[T0, T1, T2, T3 comparable] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs         *ReactiveSystem
+	versionSum uint32
 	fn         func(T0, T1, T2, T3) error
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
 }
 
 func Effect4[T0, T1, T2, T3 comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
 	fn func(T0, T1, T2, T3) error,
 ) (stop func()) {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect4[T0, T1, T2, T3]{
-		system:     sys,
 		fn:         fn,
-		lastUpdate: 0,
-		cell0:      arg0,
-		cell1:      arg1,
-		cell2:      arg2,
-		cell3:      arg3,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
+		dep0.value().(T0),
+		dep1.value().(T1),
+		dep2.value().(T2),
+		dep3.value().(T3),
 	)
 
 	return func() {
-		arg0.removeSub(s)
-		arg1.removeSub(s)
-		arg2.removeSub(s)
-		arg3.removeSub(s)
+		dep0.removeSub(s)
+		dep1.removeSub(s)
+		dep2.removeSub(s)
+		dep3.removeSub(s)
 	}
 }
 
 func (s *SideEffect4[T0, T1, T2, T3]) value() any {
-	current0, ok := s.cell0.value().(T0)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached0 == current0 {
+	var allArgsSum uint32
+
+	current0 := s.dep0.value().(T0)
+	currentVersion0 := s.dep0.version()
+	allArgsSum += currentVersion0
+
+	current1 := s.dep1.value().(T1)
+	currentVersion1 := s.dep1.version()
+	allArgsSum += currentVersion1
+
+	current2 := s.dep2.value().(T2)
+	currentVersion2 := s.dep2.version()
+	allArgsSum += currentVersion2
+
+	current3 := s.dep3.value().(T3)
+	currentVersion3 := s.dep3.version()
+	allArgsSum += currentVersion3
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached0 = current0
-	current1, ok := s.cell1.value().(T1)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached1 == current1 {
-		return nil
-	}
-
-	s.cached1 = current1
-	current2, ok := s.cell2.value().(T2)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached2 == current2 {
-		return nil
-	}
-
-	s.cached2 = current2
-	current3, ok := s.cell3.value().(T3)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached3 == current3 {
-		return nil
-	}
-
-	s.cached3 = current3
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
+		current0,
+		current1,
+		current2,
+		current3,
 	)
 	return nil
 }
 
 func (s *SideEffect4[T0, T1, T2, T3]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *SideEffect4[T0, T1, T2, T3]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *SideEffect4[T0, T1, T2, T3]) removeSub(sub Cell) {
-	s.cell0 = nil
-	s.cell1 = nil
-	s.cell2 = nil
-	s.cell3 = nil
 }
 
 type ReadonlySignal5Func[T0, T1, T2, T3, T4, O comparable] func(T0, T1, T2, T3, T4) O
@@ -921,136 +803,119 @@ type ReadonlySignal5Args[T0, T1, T2, T3, T4 comparable] struct {
 }
 
 type ReadonlySignal5[T0, T1, T2, T3, T4, O comparable] struct {
-	sys        *ReactiveSystem
-	subs       []Cell
+	rs         *ReactiveSystem
+	subs       []Subscriber
 	isDirty    bool
-	lastUpdate uint32
+	ver        uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get        func(T0, T1, T2, T3, T4) O
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	cell4      Cell
-	cached4    T4
-	v          O
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	dep4       Dependency
+	val        O
 }
 
 func Computed5[T0, T1, T2, T3, T4, O comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
-	arg4 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
+	dep4 Dependency,
 	get ReadonlySignal5Func[T0, T1, T2, T3, T4, O],
 ) *ReadonlySignal5[T0, T1, T2, T3, T4, O] {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &ReadonlySignal5[T0, T1, T2, T3, T4, O]{
-		isDirty: true,
-		sys:     sys,
-		get:     get,
-		cell0:   arg0,
-		cell1:   arg1,
-		cell2:   arg2,
-		cell3:   arg3,
-		cell4:   arg4,
+		isDirty:    true,
+		get:        get,
+		ver:        1,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
+		dep4:       dep4,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	arg4.addSubs(s)
-	s.cached4 = arg4.value().(T4)
-	s.v = s.get(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-	)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+	dep4.addSubs(s)
+
 	return s
 }
 
 func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) Value() O {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
 	return s.value().(O)
 }
 
 func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
-	depValue0 := s.cell0.value().(T0)
-	if s.cached0 != depValue0 {
-		allArgsMatch = false
-	}
-	depValue1 := s.cell1.value().(T1)
-	if s.cached1 != depValue1 {
-		allArgsMatch = false
-	}
-	depValue2 := s.cell2.value().(T2)
-	if s.cached2 != depValue2 {
-		allArgsMatch = false
-	}
-	depValue3 := s.cell3.value().(T3)
-	if s.cached3 != depValue3 {
-		allArgsMatch = false
-	}
-	depValue4 := s.cell4.value().(T4)
-	if s.cached4 != depValue4 {
-		allArgsMatch = false
+	var allArgsSum uint32
+	depValue0 := s.dep0.value().(T0)
+	depVersion0 := s.dep0.version()
+	allArgsSum += depVersion0
+	depValue1 := s.dep1.value().(T1)
+	depVersion1 := s.dep1.version()
+	allArgsSum += depVersion1
+	depValue2 := s.dep2.value().(T2)
+	depVersion2 := s.dep2.version()
+	allArgsSum += depVersion2
+	depValue3 := s.dep3.value().(T3)
+	depVersion3 := s.dep3.version()
+	allArgsSum += depVersion3
+	depValue4 := s.dep4.value().(T4)
+	depVersion4 := s.dep4.version()
+	allArgsSum += depVersion4
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	if !allArgsMatch {
-		currentValue := s.get(
-			depValue0,
-			depValue1,
-			depValue2,
-			depValue3,
-			depValue4,
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		depValue0,
+		depValue1,
+		depValue2,
+		depValue3,
+		depValue4,
+	)
+	if s.val == currentValue {
+		return s.val
 	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
 
-	return s.v
+func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) version() uint32 {
+	return s.ver
 }
 
 func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) removeSub(cells Cell) {
+func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -1058,144 +923,100 @@ func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) removeSub(cells Cell) {
 }
 
 type SideEffect5[T0, T1, T2, T3, T4 comparable] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs         *ReactiveSystem
+	versionSum uint32
 	fn         func(T0, T1, T2, T3, T4) error
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	cell4      Cell
-	cached4    T4
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	dep4       Dependency
 }
 
 func Effect5[T0, T1, T2, T3, T4 comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
-	arg4 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
+	dep4 Dependency,
 	fn func(T0, T1, T2, T3, T4) error,
 ) (stop func()) {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect5[T0, T1, T2, T3, T4]{
-		system:     sys,
 		fn:         fn,
-		lastUpdate: 0,
-		cell0:      arg0,
-		cell1:      arg1,
-		cell2:      arg2,
-		cell3:      arg3,
-		cell4:      arg4,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
+		dep4:       dep4,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	arg4.addSubs(s)
-	s.cached4 = arg4.value().(T4)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+	dep4.addSubs(s)
+
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
+		dep0.value().(T0),
+		dep1.value().(T1),
+		dep2.value().(T2),
+		dep3.value().(T3),
+		dep4.value().(T4),
 	)
 
 	return func() {
-		arg0.removeSub(s)
-		arg1.removeSub(s)
-		arg2.removeSub(s)
-		arg3.removeSub(s)
-		arg4.removeSub(s)
+		dep0.removeSub(s)
+		dep1.removeSub(s)
+		dep2.removeSub(s)
+		dep3.removeSub(s)
+		dep4.removeSub(s)
 	}
 }
 
 func (s *SideEffect5[T0, T1, T2, T3, T4]) value() any {
-	current0, ok := s.cell0.value().(T0)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached0 == current0 {
+	var allArgsSum uint32
+
+	current0 := s.dep0.value().(T0)
+	currentVersion0 := s.dep0.version()
+	allArgsSum += currentVersion0
+
+	current1 := s.dep1.value().(T1)
+	currentVersion1 := s.dep1.version()
+	allArgsSum += currentVersion1
+
+	current2 := s.dep2.value().(T2)
+	currentVersion2 := s.dep2.version()
+	allArgsSum += currentVersion2
+
+	current3 := s.dep3.value().(T3)
+	currentVersion3 := s.dep3.version()
+	allArgsSum += currentVersion3
+
+	current4 := s.dep4.value().(T4)
+	currentVersion4 := s.dep4.version()
+	allArgsSum += currentVersion4
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached0 = current0
-	current1, ok := s.cell1.value().(T1)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached1 == current1 {
-		return nil
-	}
-
-	s.cached1 = current1
-	current2, ok := s.cell2.value().(T2)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached2 == current2 {
-		return nil
-	}
-
-	s.cached2 = current2
-	current3, ok := s.cell3.value().(T3)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached3 == current3 {
-		return nil
-	}
-
-	s.cached3 = current3
-	current4, ok := s.cell4.value().(T4)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached4 == current4 {
-		return nil
-	}
-
-	s.cached4 = current4
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
+		current0,
+		current1,
+		current2,
+		current3,
+		current4,
 	)
 	return nil
 }
 
 func (s *SideEffect5[T0, T1, T2, T3, T4]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *SideEffect5[T0, T1, T2, T3, T4]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *SideEffect5[T0, T1, T2, T3, T4]) removeSub(sub Cell) {
-	s.cell0 = nil
-	s.cell1 = nil
-	s.cell2 = nil
-	s.cell3 = nil
-	s.cell4 = nil
 }
 
 type ReadonlySignal6Func[T0, T1, T2, T3, T4, T5, O comparable] func(T0, T1, T2, T3, T4, T5) O
@@ -1210,148 +1031,127 @@ type ReadonlySignal6Args[T0, T1, T2, T3, T4, T5 comparable] struct {
 }
 
 type ReadonlySignal6[T0, T1, T2, T3, T4, T5, O comparable] struct {
-	sys        *ReactiveSystem
-	subs       []Cell
+	rs         *ReactiveSystem
+	subs       []Subscriber
 	isDirty    bool
-	lastUpdate uint32
+	ver        uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get        func(T0, T1, T2, T3, T4, T5) O
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	cell4      Cell
-	cached4    T4
-	cell5      Cell
-	cached5    T5
-	v          O
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	dep4       Dependency
+	dep5       Dependency
+	val        O
 }
 
 func Computed6[T0, T1, T2, T3, T4, T5, O comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
-	arg4 Cell,
-	arg5 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
+	dep4 Dependency,
+	dep5 Dependency,
 	get ReadonlySignal6Func[T0, T1, T2, T3, T4, T5, O],
 ) *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O] {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]{
-		isDirty: true,
-		sys:     sys,
-		get:     get,
-		cell0:   arg0,
-		cell1:   arg1,
-		cell2:   arg2,
-		cell3:   arg3,
-		cell4:   arg4,
-		cell5:   arg5,
+		isDirty:    true,
+		get:        get,
+		ver:        1,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
+		dep4:       dep4,
+		dep5:       dep5,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	arg4.addSubs(s)
-	s.cached4 = arg4.value().(T4)
-	arg5.addSubs(s)
-	s.cached5 = arg5.value().(T5)
-	s.v = s.get(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
-	)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+	dep4.addSubs(s)
+	dep5.addSubs(s)
+
 	return s
 }
 
 func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) Value() O {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
 	return s.value().(O)
 }
 
 func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
-	depValue0 := s.cell0.value().(T0)
-	if s.cached0 != depValue0 {
-		allArgsMatch = false
-	}
-	depValue1 := s.cell1.value().(T1)
-	if s.cached1 != depValue1 {
-		allArgsMatch = false
-	}
-	depValue2 := s.cell2.value().(T2)
-	if s.cached2 != depValue2 {
-		allArgsMatch = false
-	}
-	depValue3 := s.cell3.value().(T3)
-	if s.cached3 != depValue3 {
-		allArgsMatch = false
-	}
-	depValue4 := s.cell4.value().(T4)
-	if s.cached4 != depValue4 {
-		allArgsMatch = false
-	}
-	depValue5 := s.cell5.value().(T5)
-	if s.cached5 != depValue5 {
-		allArgsMatch = false
+	var allArgsSum uint32
+	depValue0 := s.dep0.value().(T0)
+	depVersion0 := s.dep0.version()
+	allArgsSum += depVersion0
+	depValue1 := s.dep1.value().(T1)
+	depVersion1 := s.dep1.version()
+	allArgsSum += depVersion1
+	depValue2 := s.dep2.value().(T2)
+	depVersion2 := s.dep2.version()
+	allArgsSum += depVersion2
+	depValue3 := s.dep3.value().(T3)
+	depVersion3 := s.dep3.version()
+	allArgsSum += depVersion3
+	depValue4 := s.dep4.value().(T4)
+	depVersion4 := s.dep4.version()
+	allArgsSum += depVersion4
+	depValue5 := s.dep5.value().(T5)
+	depVersion5 := s.dep5.version()
+	allArgsSum += depVersion5
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	if !allArgsMatch {
-		currentValue := s.get(
-			depValue0,
-			depValue1,
-			depValue2,
-			depValue3,
-			depValue4,
-			depValue5,
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		depValue0,
+		depValue1,
+		depValue2,
+		depValue3,
+		depValue4,
+		depValue5,
+	)
+	if s.val == currentValue {
+		return s.val
 	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
 
-	return s.v
+func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) version() uint32 {
+	return s.ver
 }
 
 func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) removeSub(cells Cell) {
+func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -1359,163 +1159,111 @@ func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) removeSub(cells Cell) {
 }
 
 type SideEffect6[T0, T1, T2, T3, T4, T5 comparable] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs         *ReactiveSystem
+	versionSum uint32
 	fn         func(T0, T1, T2, T3, T4, T5) error
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	cell4      Cell
-	cached4    T4
-	cell5      Cell
-	cached5    T5
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	dep4       Dependency
+	dep5       Dependency
 }
 
 func Effect6[T0, T1, T2, T3, T4, T5 comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
-	arg4 Cell,
-	arg5 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
+	dep4 Dependency,
+	dep5 Dependency,
 	fn func(T0, T1, T2, T3, T4, T5) error,
 ) (stop func()) {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect6[T0, T1, T2, T3, T4, T5]{
-		system:     sys,
 		fn:         fn,
-		lastUpdate: 0,
-		cell0:      arg0,
-		cell1:      arg1,
-		cell2:      arg2,
-		cell3:      arg3,
-		cell4:      arg4,
-		cell5:      arg5,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
+		dep4:       dep4,
+		dep5:       dep5,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	arg4.addSubs(s)
-	s.cached4 = arg4.value().(T4)
-	arg5.addSubs(s)
-	s.cached5 = arg5.value().(T5)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+	dep4.addSubs(s)
+	dep5.addSubs(s)
+
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
+		dep0.value().(T0),
+		dep1.value().(T1),
+		dep2.value().(T2),
+		dep3.value().(T3),
+		dep4.value().(T4),
+		dep5.value().(T5),
 	)
 
 	return func() {
-		arg0.removeSub(s)
-		arg1.removeSub(s)
-		arg2.removeSub(s)
-		arg3.removeSub(s)
-		arg4.removeSub(s)
-		arg5.removeSub(s)
+		dep0.removeSub(s)
+		dep1.removeSub(s)
+		dep2.removeSub(s)
+		dep3.removeSub(s)
+		dep4.removeSub(s)
+		dep5.removeSub(s)
 	}
 }
 
 func (s *SideEffect6[T0, T1, T2, T3, T4, T5]) value() any {
-	current0, ok := s.cell0.value().(T0)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached0 == current0 {
+	var allArgsSum uint32
+
+	current0 := s.dep0.value().(T0)
+	currentVersion0 := s.dep0.version()
+	allArgsSum += currentVersion0
+
+	current1 := s.dep1.value().(T1)
+	currentVersion1 := s.dep1.version()
+	allArgsSum += currentVersion1
+
+	current2 := s.dep2.value().(T2)
+	currentVersion2 := s.dep2.version()
+	allArgsSum += currentVersion2
+
+	current3 := s.dep3.value().(T3)
+	currentVersion3 := s.dep3.version()
+	allArgsSum += currentVersion3
+
+	current4 := s.dep4.value().(T4)
+	currentVersion4 := s.dep4.version()
+	allArgsSum += currentVersion4
+
+	current5 := s.dep5.value().(T5)
+	currentVersion5 := s.dep5.version()
+	allArgsSum += currentVersion5
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached0 = current0
-	current1, ok := s.cell1.value().(T1)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached1 == current1 {
-		return nil
-	}
-
-	s.cached1 = current1
-	current2, ok := s.cell2.value().(T2)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached2 == current2 {
-		return nil
-	}
-
-	s.cached2 = current2
-	current3, ok := s.cell3.value().(T3)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached3 == current3 {
-		return nil
-	}
-
-	s.cached3 = current3
-	current4, ok := s.cell4.value().(T4)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached4 == current4 {
-		return nil
-	}
-
-	s.cached4 = current4
-	current5, ok := s.cell5.value().(T5)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached5 == current5 {
-		return nil
-	}
-
-	s.cached5 = current5
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
+		current0,
+		current1,
+		current2,
+		current3,
+		current4,
+		current5,
 	)
 	return nil
 }
 
 func (s *SideEffect6[T0, T1, T2, T3, T4, T5]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *SideEffect6[T0, T1, T2, T3, T4, T5]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *SideEffect6[T0, T1, T2, T3, T4, T5]) removeSub(sub Cell) {
-	s.cell0 = nil
-	s.cell1 = nil
-	s.cell2 = nil
-	s.cell3 = nil
-	s.cell4 = nil
-	s.cell5 = nil
 }
 
 type ReadonlySignal7Func[T0, T1, T2, T3, T4, T5, T6, O comparable] func(T0, T1, T2, T3, T4, T5, T6) O
@@ -1531,160 +1279,135 @@ type ReadonlySignal7Args[T0, T1, T2, T3, T4, T5, T6 comparable] struct {
 }
 
 type ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O comparable] struct {
-	sys        *ReactiveSystem
-	subs       []Cell
+	rs         *ReactiveSystem
+	subs       []Subscriber
 	isDirty    bool
-	lastUpdate uint32
+	ver        uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get        func(T0, T1, T2, T3, T4, T5, T6) O
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	cell4      Cell
-	cached4    T4
-	cell5      Cell
-	cached5    T5
-	cell6      Cell
-	cached6    T6
-	v          O
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	dep4       Dependency
+	dep5       Dependency
+	dep6       Dependency
+	val        O
 }
 
 func Computed7[T0, T1, T2, T3, T4, T5, T6, O comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
-	arg4 Cell,
-	arg5 Cell,
-	arg6 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
+	dep4 Dependency,
+	dep5 Dependency,
+	dep6 Dependency,
 	get ReadonlySignal7Func[T0, T1, T2, T3, T4, T5, T6, O],
 ) *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O] {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]{
-		isDirty: true,
-		sys:     sys,
-		get:     get,
-		cell0:   arg0,
-		cell1:   arg1,
-		cell2:   arg2,
-		cell3:   arg3,
-		cell4:   arg4,
-		cell5:   arg5,
-		cell6:   arg6,
+		isDirty:    true,
+		get:        get,
+		ver:        1,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
+		dep4:       dep4,
+		dep5:       dep5,
+		dep6:       dep6,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	arg4.addSubs(s)
-	s.cached4 = arg4.value().(T4)
-	arg5.addSubs(s)
-	s.cached5 = arg5.value().(T5)
-	arg6.addSubs(s)
-	s.cached6 = arg6.value().(T6)
-	s.v = s.get(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
-		s.cached6,
-	)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+	dep4.addSubs(s)
+	dep5.addSubs(s)
+	dep6.addSubs(s)
+
 	return s
 }
 
 func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) Value() O {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
 	return s.value().(O)
 }
 
 func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
-	depValue0 := s.cell0.value().(T0)
-	if s.cached0 != depValue0 {
-		allArgsMatch = false
-	}
-	depValue1 := s.cell1.value().(T1)
-	if s.cached1 != depValue1 {
-		allArgsMatch = false
-	}
-	depValue2 := s.cell2.value().(T2)
-	if s.cached2 != depValue2 {
-		allArgsMatch = false
-	}
-	depValue3 := s.cell3.value().(T3)
-	if s.cached3 != depValue3 {
-		allArgsMatch = false
-	}
-	depValue4 := s.cell4.value().(T4)
-	if s.cached4 != depValue4 {
-		allArgsMatch = false
-	}
-	depValue5 := s.cell5.value().(T5)
-	if s.cached5 != depValue5 {
-		allArgsMatch = false
-	}
-	depValue6 := s.cell6.value().(T6)
-	if s.cached6 != depValue6 {
-		allArgsMatch = false
+	var allArgsSum uint32
+	depValue0 := s.dep0.value().(T0)
+	depVersion0 := s.dep0.version()
+	allArgsSum += depVersion0
+	depValue1 := s.dep1.value().(T1)
+	depVersion1 := s.dep1.version()
+	allArgsSum += depVersion1
+	depValue2 := s.dep2.value().(T2)
+	depVersion2 := s.dep2.version()
+	allArgsSum += depVersion2
+	depValue3 := s.dep3.value().(T3)
+	depVersion3 := s.dep3.version()
+	allArgsSum += depVersion3
+	depValue4 := s.dep4.value().(T4)
+	depVersion4 := s.dep4.version()
+	allArgsSum += depVersion4
+	depValue5 := s.dep5.value().(T5)
+	depVersion5 := s.dep5.version()
+	allArgsSum += depVersion5
+	depValue6 := s.dep6.value().(T6)
+	depVersion6 := s.dep6.version()
+	allArgsSum += depVersion6
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	if !allArgsMatch {
-		currentValue := s.get(
-			depValue0,
-			depValue1,
-			depValue2,
-			depValue3,
-			depValue4,
-			depValue5,
-			depValue6,
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		depValue0,
+		depValue1,
+		depValue2,
+		depValue3,
+		depValue4,
+		depValue5,
+		depValue6,
+	)
+	if s.val == currentValue {
+		return s.val
 	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
 
-	return s.v
+func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) version() uint32 {
+	return s.ver
 }
 
 func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) removeSub(cells Cell) {
+func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -1692,182 +1415,122 @@ func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) removeSub(cells Cell) {
 }
 
 type SideEffect7[T0, T1, T2, T3, T4, T5, T6 comparable] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs         *ReactiveSystem
+	versionSum uint32
 	fn         func(T0, T1, T2, T3, T4, T5, T6) error
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	cell4      Cell
-	cached4    T4
-	cell5      Cell
-	cached5    T5
-	cell6      Cell
-	cached6    T6
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	dep4       Dependency
+	dep5       Dependency
+	dep6       Dependency
 }
 
 func Effect7[T0, T1, T2, T3, T4, T5, T6 comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
-	arg4 Cell,
-	arg5 Cell,
-	arg6 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
+	dep4 Dependency,
+	dep5 Dependency,
+	dep6 Dependency,
 	fn func(T0, T1, T2, T3, T4, T5, T6) error,
 ) (stop func()) {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect7[T0, T1, T2, T3, T4, T5, T6]{
-		system:     sys,
 		fn:         fn,
-		lastUpdate: 0,
-		cell0:      arg0,
-		cell1:      arg1,
-		cell2:      arg2,
-		cell3:      arg3,
-		cell4:      arg4,
-		cell5:      arg5,
-		cell6:      arg6,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
+		dep4:       dep4,
+		dep5:       dep5,
+		dep6:       dep6,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	arg4.addSubs(s)
-	s.cached4 = arg4.value().(T4)
-	arg5.addSubs(s)
-	s.cached5 = arg5.value().(T5)
-	arg6.addSubs(s)
-	s.cached6 = arg6.value().(T6)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+	dep4.addSubs(s)
+	dep5.addSubs(s)
+	dep6.addSubs(s)
+
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
-		s.cached6,
+		dep0.value().(T0),
+		dep1.value().(T1),
+		dep2.value().(T2),
+		dep3.value().(T3),
+		dep4.value().(T4),
+		dep5.value().(T5),
+		dep6.value().(T6),
 	)
 
 	return func() {
-		arg0.removeSub(s)
-		arg1.removeSub(s)
-		arg2.removeSub(s)
-		arg3.removeSub(s)
-		arg4.removeSub(s)
-		arg5.removeSub(s)
-		arg6.removeSub(s)
+		dep0.removeSub(s)
+		dep1.removeSub(s)
+		dep2.removeSub(s)
+		dep3.removeSub(s)
+		dep4.removeSub(s)
+		dep5.removeSub(s)
+		dep6.removeSub(s)
 	}
 }
 
 func (s *SideEffect7[T0, T1, T2, T3, T4, T5, T6]) value() any {
-	current0, ok := s.cell0.value().(T0)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached0 == current0 {
+	var allArgsSum uint32
+
+	current0 := s.dep0.value().(T0)
+	currentVersion0 := s.dep0.version()
+	allArgsSum += currentVersion0
+
+	current1 := s.dep1.value().(T1)
+	currentVersion1 := s.dep1.version()
+	allArgsSum += currentVersion1
+
+	current2 := s.dep2.value().(T2)
+	currentVersion2 := s.dep2.version()
+	allArgsSum += currentVersion2
+
+	current3 := s.dep3.value().(T3)
+	currentVersion3 := s.dep3.version()
+	allArgsSum += currentVersion3
+
+	current4 := s.dep4.value().(T4)
+	currentVersion4 := s.dep4.version()
+	allArgsSum += currentVersion4
+
+	current5 := s.dep5.value().(T5)
+	currentVersion5 := s.dep5.version()
+	allArgsSum += currentVersion5
+
+	current6 := s.dep6.value().(T6)
+	currentVersion6 := s.dep6.version()
+	allArgsSum += currentVersion6
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached0 = current0
-	current1, ok := s.cell1.value().(T1)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached1 == current1 {
-		return nil
-	}
-
-	s.cached1 = current1
-	current2, ok := s.cell2.value().(T2)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached2 == current2 {
-		return nil
-	}
-
-	s.cached2 = current2
-	current3, ok := s.cell3.value().(T3)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached3 == current3 {
-		return nil
-	}
-
-	s.cached3 = current3
-	current4, ok := s.cell4.value().(T4)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached4 == current4 {
-		return nil
-	}
-
-	s.cached4 = current4
-	current5, ok := s.cell5.value().(T5)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached5 == current5 {
-		return nil
-	}
-
-	s.cached5 = current5
-	current6, ok := s.cell6.value().(T6)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached6 == current6 {
-		return nil
-	}
-
-	s.cached6 = current6
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
-		s.cached6,
+		current0,
+		current1,
+		current2,
+		current3,
+		current4,
+		current5,
+		current6,
 	)
 	return nil
 }
 
 func (s *SideEffect7[T0, T1, T2, T3, T4, T5, T6]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *SideEffect7[T0, T1, T2, T3, T4, T5, T6]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *SideEffect7[T0, T1, T2, T3, T4, T5, T6]) removeSub(sub Cell) {
-	s.cell0 = nil
-	s.cell1 = nil
-	s.cell2 = nil
-	s.cell3 = nil
-	s.cell4 = nil
-	s.cell5 = nil
-	s.cell6 = nil
 }
 
 type ReadonlySignal8Func[T0, T1, T2, T3, T4, T5, T6, T7, O comparable] func(T0, T1, T2, T3, T4, T5, T6, T7) O
@@ -1884,172 +1547,143 @@ type ReadonlySignal8Args[T0, T1, T2, T3, T4, T5, T6, T7 comparable] struct {
 }
 
 type ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O comparable] struct {
-	sys        *ReactiveSystem
-	subs       []Cell
+	rs         *ReactiveSystem
+	subs       []Subscriber
 	isDirty    bool
-	lastUpdate uint32
+	ver        uint32 // value of readoly signals changes atomic increment
+	versionSum uint32 // value of dependencies changes
 	get        func(T0, T1, T2, T3, T4, T5, T6, T7) O
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	cell4      Cell
-	cached4    T4
-	cell5      Cell
-	cached5    T5
-	cell6      Cell
-	cached6    T6
-	cell7      Cell
-	cached7    T7
-	v          O
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	dep4       Dependency
+	dep5       Dependency
+	dep6       Dependency
+	dep7       Dependency
+	val        O
 }
 
 func Computed8[T0, T1, T2, T3, T4, T5, T6, T7, O comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
-	arg4 Cell,
-	arg5 Cell,
-	arg6 Cell,
-	arg7 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
+	dep4 Dependency,
+	dep5 Dependency,
+	dep6 Dependency,
+	dep7 Dependency,
 	get ReadonlySignal8Func[T0, T1, T2, T3, T4, T5, T6, T7, O],
 ) *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O] {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]{
-		isDirty: true,
-		sys:     sys,
-		get:     get,
-		cell0:   arg0,
-		cell1:   arg1,
-		cell2:   arg2,
-		cell3:   arg3,
-		cell4:   arg4,
-		cell5:   arg5,
-		cell6:   arg6,
-		cell7:   arg7,
+		isDirty:    true,
+		get:        get,
+		ver:        1,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
+		dep4:       dep4,
+		dep5:       dep5,
+		dep6:       dep6,
+		dep7:       dep7,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	arg4.addSubs(s)
-	s.cached4 = arg4.value().(T4)
-	arg5.addSubs(s)
-	s.cached5 = arg5.value().(T5)
-	arg6.addSubs(s)
-	s.cached6 = arg6.value().(T6)
-	arg7.addSubs(s)
-	s.cached7 = arg7.value().(T7)
-	s.v = s.get(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
-		s.cached6,
-		s.cached7,
-	)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+	dep4.addSubs(s)
+	dep5.addSubs(s)
+	dep6.addSubs(s)
+	dep7.addSubs(s)
+
 	return s
 }
 
 func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) Value() O {
-	s.sys.mu.Lock()
-	defer s.sys.mu.Unlock()
+	s.rs.mu.Lock()
+	defer s.rs.mu.Unlock()
 
 	return s.value().(O)
 }
 
 func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) value() any {
 	if !s.isDirty {
-		return s.v
+		return s.val
 	}
 	s.isDirty = false
 
-	allArgsMatch := true
-	depValue0 := s.cell0.value().(T0)
-	if s.cached0 != depValue0 {
-		allArgsMatch = false
-	}
-	depValue1 := s.cell1.value().(T1)
-	if s.cached1 != depValue1 {
-		allArgsMatch = false
-	}
-	depValue2 := s.cell2.value().(T2)
-	if s.cached2 != depValue2 {
-		allArgsMatch = false
-	}
-	depValue3 := s.cell3.value().(T3)
-	if s.cached3 != depValue3 {
-		allArgsMatch = false
-	}
-	depValue4 := s.cell4.value().(T4)
-	if s.cached4 != depValue4 {
-		allArgsMatch = false
-	}
-	depValue5 := s.cell5.value().(T5)
-	if s.cached5 != depValue5 {
-		allArgsMatch = false
-	}
-	depValue6 := s.cell6.value().(T6)
-	if s.cached6 != depValue6 {
-		allArgsMatch = false
-	}
-	depValue7 := s.cell7.value().(T7)
-	if s.cached7 != depValue7 {
-		allArgsMatch = false
+	var allArgsSum uint32
+	depValue0 := s.dep0.value().(T0)
+	depVersion0 := s.dep0.version()
+	allArgsSum += depVersion0
+	depValue1 := s.dep1.value().(T1)
+	depVersion1 := s.dep1.version()
+	allArgsSum += depVersion1
+	depValue2 := s.dep2.value().(T2)
+	depVersion2 := s.dep2.version()
+	allArgsSum += depVersion2
+	depValue3 := s.dep3.value().(T3)
+	depVersion3 := s.dep3.version()
+	allArgsSum += depVersion3
+	depValue4 := s.dep4.value().(T4)
+	depVersion4 := s.dep4.version()
+	allArgsSum += depVersion4
+	depValue5 := s.dep5.value().(T5)
+	depVersion5 := s.dep5.version()
+	allArgsSum += depVersion5
+	depValue6 := s.dep6.value().(T6)
+	depVersion6 := s.dep6.version()
+	allArgsSum += depVersion6
+	depValue7 := s.dep7.value().(T7)
+	depVersion7 := s.dep7.version()
+	allArgsSum += depVersion7
+	if allArgsSum == s.versionSum {
+		return s.val
 	}
 
-	if !allArgsMatch {
-		currentValue := s.get(
-			depValue0,
-			depValue1,
-			depValue2,
-			depValue3,
-			depValue4,
-			depValue5,
-			depValue6,
-			depValue7,
-		)
-		if s.v == currentValue {
-			return s.v
-		}
-		s.v = currentValue
+	s.versionSum = allArgsSum
+	currentValue := s.get(
+		depValue0,
+		depValue1,
+		depValue2,
+		depValue3,
+		depValue4,
+		depValue5,
+		depValue6,
+		depValue7,
+	)
+	if s.val == currentValue {
+		return s.val
 	}
+	s.val = currentValue
+	s.ver++
+	return s.val
+}
 
-	return s.v
+func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) version() uint32 {
+	return s.ver
 }
 
 func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) markDirty() {
-	if s.isDirty || s.lastUpdate == s.sys.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.sys.currentUpdate
 	s.isDirty = true
 	for _, sub := range s.subs {
 		sub.markDirty()
 	}
 }
 
-func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) addSubs(cells ...Cell) {
-	s.subs = append(s.subs, cells...)
+func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) addSubs(subs ...Subscriber) {
+	s.subs = append(s.subs, subs...)
 }
 
-func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) removeSub(cells Cell) {
+func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) removeSub(toRemove Subscriber) {
 	for i, sub := range s.subs {
-		if sub == cells {
+		if sub == toRemove {
 			s.subs = append(s.subs[:i], s.subs[i+1:]...)
 			return
 		}
@@ -2057,199 +1691,131 @@ func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) removeSub(cells Cel
 }
 
 type SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable] struct {
-	system     *ReactiveSystem
-	lastUpdate uint32
+	rs         *ReactiveSystem
+	versionSum uint32
 	fn         func(T0, T1, T2, T3, T4, T5, T6, T7) error
-	cell0      Cell
-	cached0    T0
-	cell1      Cell
-	cached1    T1
-	cell2      Cell
-	cached2    T2
-	cell3      Cell
-	cached3    T3
-	cell4      Cell
-	cached4    T4
-	cell5      Cell
-	cached5    T5
-	cell6      Cell
-	cached6    T6
-	cell7      Cell
-	cached7    T7
+	dep0       Dependency
+	dep1       Dependency
+	dep2       Dependency
+	dep3       Dependency
+	dep4       Dependency
+	dep5       Dependency
+	dep6       Dependency
+	dep7       Dependency
 }
 
 func Effect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable](
-	sys *ReactiveSystem,
-	arg0 Cell,
-	arg1 Cell,
-	arg2 Cell,
-	arg3 Cell,
-	arg4 Cell,
-	arg5 Cell,
-	arg6 Cell,
-	arg7 Cell,
+	rs *ReactiveSystem,
+	dep0 Dependency,
+	dep1 Dependency,
+	dep2 Dependency,
+	dep3 Dependency,
+	dep4 Dependency,
+	dep5 Dependency,
+	dep6 Dependency,
+	dep7 Dependency,
 	fn func(T0, T1, T2, T3, T4, T5, T6, T7) error,
 ) (stop func()) {
-	sys.mu.Lock()
-	defer sys.mu.Unlock()
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]{
-		system:     sys,
 		fn:         fn,
-		lastUpdate: 0,
-		cell0:      arg0,
-		cell1:      arg1,
-		cell2:      arg2,
-		cell3:      arg3,
-		cell4:      arg4,
-		cell5:      arg5,
-		cell6:      arg6,
-		cell7:      arg7,
+		versionSum: 0,
+		dep0:       dep0,
+		dep1:       dep1,
+		dep2:       dep2,
+		dep3:       dep3,
+		dep4:       dep4,
+		dep5:       dep5,
+		dep6:       dep6,
+		dep7:       dep7,
 	}
-	arg0.addSubs(s)
-	s.cached0 = arg0.value().(T0)
-	arg1.addSubs(s)
-	s.cached1 = arg1.value().(T1)
-	arg2.addSubs(s)
-	s.cached2 = arg2.value().(T2)
-	arg3.addSubs(s)
-	s.cached3 = arg3.value().(T3)
-	arg4.addSubs(s)
-	s.cached4 = arg4.value().(T4)
-	arg5.addSubs(s)
-	s.cached5 = arg5.value().(T5)
-	arg6.addSubs(s)
-	s.cached6 = arg6.value().(T6)
-	arg7.addSubs(s)
-	s.cached7 = arg7.value().(T7)
+	dep0.addSubs(s)
+	dep1.addSubs(s)
+	dep2.addSubs(s)
+	dep3.addSubs(s)
+	dep4.addSubs(s)
+	dep5.addSubs(s)
+	dep6.addSubs(s)
+	dep7.addSubs(s)
+
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
-		s.cached6,
-		s.cached7,
+		dep0.value().(T0),
+		dep1.value().(T1),
+		dep2.value().(T2),
+		dep3.value().(T3),
+		dep4.value().(T4),
+		dep5.value().(T5),
+		dep6.value().(T6),
+		dep7.value().(T7),
 	)
 
 	return func() {
-		arg0.removeSub(s)
-		arg1.removeSub(s)
-		arg2.removeSub(s)
-		arg3.removeSub(s)
-		arg4.removeSub(s)
-		arg5.removeSub(s)
-		arg6.removeSub(s)
-		arg7.removeSub(s)
+		dep0.removeSub(s)
+		dep1.removeSub(s)
+		dep2.removeSub(s)
+		dep3.removeSub(s)
+		dep4.removeSub(s)
+		dep5.removeSub(s)
+		dep6.removeSub(s)
+		dep7.removeSub(s)
 	}
 }
 
 func (s *SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]) value() any {
-	current0, ok := s.cell0.value().(T0)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached0 == current0 {
+	var allArgsSum uint32
+
+	current0 := s.dep0.value().(T0)
+	currentVersion0 := s.dep0.version()
+	allArgsSum += currentVersion0
+
+	current1 := s.dep1.value().(T1)
+	currentVersion1 := s.dep1.version()
+	allArgsSum += currentVersion1
+
+	current2 := s.dep2.value().(T2)
+	currentVersion2 := s.dep2.version()
+	allArgsSum += currentVersion2
+
+	current3 := s.dep3.value().(T3)
+	currentVersion3 := s.dep3.version()
+	allArgsSum += currentVersion3
+
+	current4 := s.dep4.value().(T4)
+	currentVersion4 := s.dep4.version()
+	allArgsSum += currentVersion4
+
+	current5 := s.dep5.value().(T5)
+	currentVersion5 := s.dep5.version()
+	allArgsSum += currentVersion5
+
+	current6 := s.dep6.value().(T6)
+	currentVersion6 := s.dep6.version()
+	allArgsSum += currentVersion6
+
+	current7 := s.dep7.value().(T7)
+	currentVersion7 := s.dep7.version()
+	allArgsSum += currentVersion7
+
+	if allArgsSum == s.versionSum {
 		return nil
 	}
+	s.versionSum = allArgsSum
 
-	s.cached0 = current0
-	current1, ok := s.cell1.value().(T1)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached1 == current1 {
-		return nil
-	}
-
-	s.cached1 = current1
-	current2, ok := s.cell2.value().(T2)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached2 == current2 {
-		return nil
-	}
-
-	s.cached2 = current2
-	current3, ok := s.cell3.value().(T3)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached3 == current3 {
-		return nil
-	}
-
-	s.cached3 = current3
-	current4, ok := s.cell4.value().(T4)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached4 == current4 {
-		return nil
-	}
-
-	s.cached4 = current4
-	current5, ok := s.cell5.value().(T5)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached5 == current5 {
-		return nil
-	}
-
-	s.cached5 = current5
-	current6, ok := s.cell6.value().(T6)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached6 == current6 {
-		return nil
-	}
-
-	s.cached6 = current6
-	current7, ok := s.cell7.value().(T7)
-	if !ok {
-		panic("type assertion failed")
-	}
-	if s.cached7 == current7 {
-		return nil
-	}
-
-	s.cached7 = current7
 	s.fn(
-		s.cached0,
-		s.cached1,
-		s.cached2,
-		s.cached3,
-		s.cached4,
-		s.cached5,
-		s.cached6,
-		s.cached7,
+		current0,
+		current1,
+		current2,
+		current3,
+		current4,
+		current5,
+		current6,
+		current7,
 	)
 	return nil
 }
 
 func (s *SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]) markDirty() {
-	if s.lastUpdate == s.system.currentUpdate {
-		return
-	}
-	s.lastUpdate = s.system.currentUpdate
 	s.value()
-}
-
-func (s *SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]) addSubs(sub ...Cell) {
-	panic("not allowed")
-}
-
-func (s *SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]) removeSub(sub Cell) {
-	s.cell0 = nil
-	s.cell1 = nil
-	s.cell2 = nil
-	s.cell3 = nil
-	s.cell4 = nil
-	s.cell5 = nil
-	s.cell6 = nil
-	s.cell7 = nil
 }
