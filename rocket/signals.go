@@ -194,6 +194,7 @@ func Effect1[T0 comparable](
 	defer rs.mu.Unlock()
 
 	s := &SideEffect1[T0]{
+		rs:         rs,
 		fn:         fn,
 		versionSum: 0,
 		dep0:       dep0,
@@ -352,6 +353,7 @@ func Effect2[T0, T1 comparable](
 	defer rs.mu.Unlock()
 
 	s := &SideEffect2[T0, T1]{
+		rs:         rs,
 		fn:         fn,
 		versionSum: 0,
 		dep0:       dep0,
@@ -530,6 +532,7 @@ func Effect3[T0, T1, T2 comparable](
 	defer rs.mu.Unlock()
 
 	s := &SideEffect3[T0, T1, T2]{
+		rs:         rs,
 		fn:         fn,
 		versionSum: 0,
 		dep0:       dep0,
@@ -728,6 +731,7 @@ func Effect4[T0, T1, T2, T3 comparable](
 	defer rs.mu.Unlock()
 
 	s := &SideEffect4[T0, T1, T2, T3]{
+		rs:         rs,
 		fn:         fn,
 		versionSum: 0,
 		dep0:       dep0,
@@ -946,6 +950,7 @@ func Effect5[T0, T1, T2, T3, T4 comparable](
 	defer rs.mu.Unlock()
 
 	s := &SideEffect5[T0, T1, T2, T3, T4]{
+		rs:         rs,
 		fn:         fn,
 		versionSum: 0,
 		dep0:       dep0,
@@ -1184,6 +1189,7 @@ func Effect6[T0, T1, T2, T3, T4, T5 comparable](
 	defer rs.mu.Unlock()
 
 	s := &SideEffect6[T0, T1, T2, T3, T4, T5]{
+		rs:         rs,
 		fn:         fn,
 		versionSum: 0,
 		dep0:       dep0,
@@ -1442,6 +1448,7 @@ func Effect7[T0, T1, T2, T3, T4, T5, T6 comparable](
 	defer rs.mu.Unlock()
 
 	s := &SideEffect7[T0, T1, T2, T3, T4, T5, T6]{
+		rs:         rs,
 		fn:         fn,
 		versionSum: 0,
 		dep0:       dep0,
@@ -1720,6 +1727,7 @@ func Effect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable](
 	defer rs.mu.Unlock()
 
 	s := &SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]{
+		rs:         rs,
 		fn:         fn,
 		versionSum: 0,
 		dep0:       dep0,

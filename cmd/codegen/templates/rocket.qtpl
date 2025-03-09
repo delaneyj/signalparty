@@ -255,6 +255,7 @@ func Effect{%d i+1%}[{%s genericParamsComparable %}](
 	{%- endif -%}
 
 	s := &{%s effectPrefix %}[{%s genericParams %}]{
+		rs:     rs,
 		fn:     fn,
 		versionSum: 0,
 		{%- for i := 0; i < genericCount; i++ -%}
