@@ -187,7 +187,11 @@ func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) value() any {
 
 	var allArgsSum uint32
 	{%- for i := 0; i < genericCount; i++ -%}
-	depValue{%d i %} := s.dep{%d i %}.value().(T{%d i %})
+	depValue{%d i %}, ok{%d i %} := s.dep{%d i %}.value().(T{%d i %})
+	if !ok{%d i %} {
+		var zeroT{%d i %} T{%d i %}
+		depValue{%d i %} = zeroT{%d i %}
+	}
 	depVersion{%d i %} := s.dep{%d i %}.version()
 	allArgsSum += depVersion{%d i %}
 	{%- endfor -%}
@@ -283,7 +287,11 @@ func (s *{%s effectPrefix %}[{%s genericParams %}]) value() any {
 	var allArgsSum uint32
 
 	{%- for i := 0; i < genericCount; i++ -%}
-	current{%d i %} := s.dep{%d i %}.value().(T{%d i %})
+	current{%d i %},ok{%d i %} := s.dep{%d i %}.value().(T{%d i %})
+	if !ok{%d i %} {
+		var zeroT{%d i %} T{%d i %}
+		current{%d i %} = zeroT{%d i %}
+	}
 	currentVersion{%d i %} := s.dep{%d i %}.version()
 	allArgsSum += currentVersion{%d i %}
 

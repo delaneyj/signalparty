@@ -135,7 +135,11 @@ func (s *ReadonlySignal1[T0, O]) value() any {
 	s.isDirty = false
 
 	var allArgsSum uint32
-	depValue0 := s.dep0.value().(T0)
+	depValue0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		depValue0 = zeroT0
+	}
 	depVersion0 := s.dep0.version()
 	allArgsSum += depVersion0
 	if allArgsSum == s.versionSum {
@@ -213,7 +217,11 @@ func Effect1[T0 comparable](
 func (s *SideEffect1[T0]) value() any {
 	var allArgsSum uint32
 
-	current0 := s.dep0.value().(T0)
+	current0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		current0 = zeroT0
+	}
 	currentVersion0 := s.dep0.version()
 	allArgsSum += currentVersion0
 
@@ -288,10 +296,18 @@ func (s *ReadonlySignal2[T0, T1, O]) value() any {
 	s.isDirty = false
 
 	var allArgsSum uint32
-	depValue0 := s.dep0.value().(T0)
+	depValue0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		depValue0 = zeroT0
+	}
 	depVersion0 := s.dep0.version()
 	allArgsSum += depVersion0
-	depValue1 := s.dep1.value().(T1)
+	depValue1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		depValue1 = zeroT1
+	}
 	depVersion1 := s.dep1.version()
 	allArgsSum += depVersion1
 	if allArgsSum == s.versionSum {
@@ -376,11 +392,19 @@ func Effect2[T0, T1 comparable](
 func (s *SideEffect2[T0, T1]) value() any {
 	var allArgsSum uint32
 
-	current0 := s.dep0.value().(T0)
+	current0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		current0 = zeroT0
+	}
 	currentVersion0 := s.dep0.version()
 	allArgsSum += currentVersion0
 
-	current1 := s.dep1.value().(T1)
+	current1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		current1 = zeroT1
+	}
 	currentVersion1 := s.dep1.version()
 	allArgsSum += currentVersion1
 
@@ -461,13 +485,25 @@ func (s *ReadonlySignal3[T0, T1, T2, O]) value() any {
 	s.isDirty = false
 
 	var allArgsSum uint32
-	depValue0 := s.dep0.value().(T0)
+	depValue0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		depValue0 = zeroT0
+	}
 	depVersion0 := s.dep0.version()
 	allArgsSum += depVersion0
-	depValue1 := s.dep1.value().(T1)
+	depValue1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		depValue1 = zeroT1
+	}
 	depVersion1 := s.dep1.version()
 	allArgsSum += depVersion1
-	depValue2 := s.dep2.value().(T2)
+	depValue2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		depValue2 = zeroT2
+	}
 	depVersion2 := s.dep2.version()
 	allArgsSum += depVersion2
 	if allArgsSum == s.versionSum {
@@ -559,15 +595,27 @@ func Effect3[T0, T1, T2 comparable](
 func (s *SideEffect3[T0, T1, T2]) value() any {
 	var allArgsSum uint32
 
-	current0 := s.dep0.value().(T0)
+	current0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		current0 = zeroT0
+	}
 	currentVersion0 := s.dep0.version()
 	allArgsSum += currentVersion0
 
-	current1 := s.dep1.value().(T1)
+	current1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		current1 = zeroT1
+	}
 	currentVersion1 := s.dep1.version()
 	allArgsSum += currentVersion1
 
-	current2 := s.dep2.value().(T2)
+	current2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		current2 = zeroT2
+	}
 	currentVersion2 := s.dep2.version()
 	allArgsSum += currentVersion2
 
@@ -654,16 +702,32 @@ func (s *ReadonlySignal4[T0, T1, T2, T3, O]) value() any {
 	s.isDirty = false
 
 	var allArgsSum uint32
-	depValue0 := s.dep0.value().(T0)
+	depValue0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		depValue0 = zeroT0
+	}
 	depVersion0 := s.dep0.version()
 	allArgsSum += depVersion0
-	depValue1 := s.dep1.value().(T1)
+	depValue1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		depValue1 = zeroT1
+	}
 	depVersion1 := s.dep1.version()
 	allArgsSum += depVersion1
-	depValue2 := s.dep2.value().(T2)
+	depValue2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		depValue2 = zeroT2
+	}
 	depVersion2 := s.dep2.version()
 	allArgsSum += depVersion2
-	depValue3 := s.dep3.value().(T3)
+	depValue3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		depValue3 = zeroT3
+	}
 	depVersion3 := s.dep3.version()
 	allArgsSum += depVersion3
 	if allArgsSum == s.versionSum {
@@ -762,19 +826,35 @@ func Effect4[T0, T1, T2, T3 comparable](
 func (s *SideEffect4[T0, T1, T2, T3]) value() any {
 	var allArgsSum uint32
 
-	current0 := s.dep0.value().(T0)
+	current0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		current0 = zeroT0
+	}
 	currentVersion0 := s.dep0.version()
 	allArgsSum += currentVersion0
 
-	current1 := s.dep1.value().(T1)
+	current1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		current1 = zeroT1
+	}
 	currentVersion1 := s.dep1.version()
 	allArgsSum += currentVersion1
 
-	current2 := s.dep2.value().(T2)
+	current2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		current2 = zeroT2
+	}
 	currentVersion2 := s.dep2.version()
 	allArgsSum += currentVersion2
 
-	current3 := s.dep3.value().(T3)
+	current3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		current3 = zeroT3
+	}
 	currentVersion3 := s.dep3.version()
 	allArgsSum += currentVersion3
 
@@ -867,19 +947,39 @@ func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) value() any {
 	s.isDirty = false
 
 	var allArgsSum uint32
-	depValue0 := s.dep0.value().(T0)
+	depValue0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		depValue0 = zeroT0
+	}
 	depVersion0 := s.dep0.version()
 	allArgsSum += depVersion0
-	depValue1 := s.dep1.value().(T1)
+	depValue1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		depValue1 = zeroT1
+	}
 	depVersion1 := s.dep1.version()
 	allArgsSum += depVersion1
-	depValue2 := s.dep2.value().(T2)
+	depValue2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		depValue2 = zeroT2
+	}
 	depVersion2 := s.dep2.version()
 	allArgsSum += depVersion2
-	depValue3 := s.dep3.value().(T3)
+	depValue3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		depValue3 = zeroT3
+	}
 	depVersion3 := s.dep3.version()
 	allArgsSum += depVersion3
-	depValue4 := s.dep4.value().(T4)
+	depValue4, ok4 := s.dep4.value().(T4)
+	if !ok4 {
+		var zeroT4 T4
+		depValue4 = zeroT4
+	}
 	depVersion4 := s.dep4.version()
 	allArgsSum += depVersion4
 	if allArgsSum == s.versionSum {
@@ -985,23 +1085,43 @@ func Effect5[T0, T1, T2, T3, T4 comparable](
 func (s *SideEffect5[T0, T1, T2, T3, T4]) value() any {
 	var allArgsSum uint32
 
-	current0 := s.dep0.value().(T0)
+	current0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		current0 = zeroT0
+	}
 	currentVersion0 := s.dep0.version()
 	allArgsSum += currentVersion0
 
-	current1 := s.dep1.value().(T1)
+	current1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		current1 = zeroT1
+	}
 	currentVersion1 := s.dep1.version()
 	allArgsSum += currentVersion1
 
-	current2 := s.dep2.value().(T2)
+	current2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		current2 = zeroT2
+	}
 	currentVersion2 := s.dep2.version()
 	allArgsSum += currentVersion2
 
-	current3 := s.dep3.value().(T3)
+	current3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		current3 = zeroT3
+	}
 	currentVersion3 := s.dep3.version()
 	allArgsSum += currentVersion3
 
-	current4 := s.dep4.value().(T4)
+	current4, ok4 := s.dep4.value().(T4)
+	if !ok4 {
+		var zeroT4 T4
+		current4 = zeroT4
+	}
 	currentVersion4 := s.dep4.version()
 	allArgsSum += currentVersion4
 
@@ -1100,22 +1220,46 @@ func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) value() any {
 	s.isDirty = false
 
 	var allArgsSum uint32
-	depValue0 := s.dep0.value().(T0)
+	depValue0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		depValue0 = zeroT0
+	}
 	depVersion0 := s.dep0.version()
 	allArgsSum += depVersion0
-	depValue1 := s.dep1.value().(T1)
+	depValue1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		depValue1 = zeroT1
+	}
 	depVersion1 := s.dep1.version()
 	allArgsSum += depVersion1
-	depValue2 := s.dep2.value().(T2)
+	depValue2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		depValue2 = zeroT2
+	}
 	depVersion2 := s.dep2.version()
 	allArgsSum += depVersion2
-	depValue3 := s.dep3.value().(T3)
+	depValue3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		depValue3 = zeroT3
+	}
 	depVersion3 := s.dep3.version()
 	allArgsSum += depVersion3
-	depValue4 := s.dep4.value().(T4)
+	depValue4, ok4 := s.dep4.value().(T4)
+	if !ok4 {
+		var zeroT4 T4
+		depValue4 = zeroT4
+	}
 	depVersion4 := s.dep4.version()
 	allArgsSum += depVersion4
-	depValue5 := s.dep5.value().(T5)
+	depValue5, ok5 := s.dep5.value().(T5)
+	if !ok5 {
+		var zeroT5 T5
+		depValue5 = zeroT5
+	}
 	depVersion5 := s.dep5.version()
 	allArgsSum += depVersion5
 	if allArgsSum == s.versionSum {
@@ -1228,27 +1372,51 @@ func Effect6[T0, T1, T2, T3, T4, T5 comparable](
 func (s *SideEffect6[T0, T1, T2, T3, T4, T5]) value() any {
 	var allArgsSum uint32
 
-	current0 := s.dep0.value().(T0)
+	current0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		current0 = zeroT0
+	}
 	currentVersion0 := s.dep0.version()
 	allArgsSum += currentVersion0
 
-	current1 := s.dep1.value().(T1)
+	current1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		current1 = zeroT1
+	}
 	currentVersion1 := s.dep1.version()
 	allArgsSum += currentVersion1
 
-	current2 := s.dep2.value().(T2)
+	current2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		current2 = zeroT2
+	}
 	currentVersion2 := s.dep2.version()
 	allArgsSum += currentVersion2
 
-	current3 := s.dep3.value().(T3)
+	current3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		current3 = zeroT3
+	}
 	currentVersion3 := s.dep3.version()
 	allArgsSum += currentVersion3
 
-	current4 := s.dep4.value().(T4)
+	current4, ok4 := s.dep4.value().(T4)
+	if !ok4 {
+		var zeroT4 T4
+		current4 = zeroT4
+	}
 	currentVersion4 := s.dep4.version()
 	allArgsSum += currentVersion4
 
-	current5 := s.dep5.value().(T5)
+	current5, ok5 := s.dep5.value().(T5)
+	if !ok5 {
+		var zeroT5 T5
+		current5 = zeroT5
+	}
 	currentVersion5 := s.dep5.version()
 	allArgsSum += currentVersion5
 
@@ -1353,25 +1521,53 @@ func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) value() any {
 	s.isDirty = false
 
 	var allArgsSum uint32
-	depValue0 := s.dep0.value().(T0)
+	depValue0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		depValue0 = zeroT0
+	}
 	depVersion0 := s.dep0.version()
 	allArgsSum += depVersion0
-	depValue1 := s.dep1.value().(T1)
+	depValue1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		depValue1 = zeroT1
+	}
 	depVersion1 := s.dep1.version()
 	allArgsSum += depVersion1
-	depValue2 := s.dep2.value().(T2)
+	depValue2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		depValue2 = zeroT2
+	}
 	depVersion2 := s.dep2.version()
 	allArgsSum += depVersion2
-	depValue3 := s.dep3.value().(T3)
+	depValue3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		depValue3 = zeroT3
+	}
 	depVersion3 := s.dep3.version()
 	allArgsSum += depVersion3
-	depValue4 := s.dep4.value().(T4)
+	depValue4, ok4 := s.dep4.value().(T4)
+	if !ok4 {
+		var zeroT4 T4
+		depValue4 = zeroT4
+	}
 	depVersion4 := s.dep4.version()
 	allArgsSum += depVersion4
-	depValue5 := s.dep5.value().(T5)
+	depValue5, ok5 := s.dep5.value().(T5)
+	if !ok5 {
+		var zeroT5 T5
+		depValue5 = zeroT5
+	}
 	depVersion5 := s.dep5.version()
 	allArgsSum += depVersion5
-	depValue6 := s.dep6.value().(T6)
+	depValue6, ok6 := s.dep6.value().(T6)
+	if !ok6 {
+		var zeroT6 T6
+		depValue6 = zeroT6
+	}
 	depVersion6 := s.dep6.version()
 	allArgsSum += depVersion6
 	if allArgsSum == s.versionSum {
@@ -1491,31 +1687,59 @@ func Effect7[T0, T1, T2, T3, T4, T5, T6 comparable](
 func (s *SideEffect7[T0, T1, T2, T3, T4, T5, T6]) value() any {
 	var allArgsSum uint32
 
-	current0 := s.dep0.value().(T0)
+	current0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		current0 = zeroT0
+	}
 	currentVersion0 := s.dep0.version()
 	allArgsSum += currentVersion0
 
-	current1 := s.dep1.value().(T1)
+	current1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		current1 = zeroT1
+	}
 	currentVersion1 := s.dep1.version()
 	allArgsSum += currentVersion1
 
-	current2 := s.dep2.value().(T2)
+	current2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		current2 = zeroT2
+	}
 	currentVersion2 := s.dep2.version()
 	allArgsSum += currentVersion2
 
-	current3 := s.dep3.value().(T3)
+	current3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		current3 = zeroT3
+	}
 	currentVersion3 := s.dep3.version()
 	allArgsSum += currentVersion3
 
-	current4 := s.dep4.value().(T4)
+	current4, ok4 := s.dep4.value().(T4)
+	if !ok4 {
+		var zeroT4 T4
+		current4 = zeroT4
+	}
 	currentVersion4 := s.dep4.version()
 	allArgsSum += currentVersion4
 
-	current5 := s.dep5.value().(T5)
+	current5, ok5 := s.dep5.value().(T5)
+	if !ok5 {
+		var zeroT5 T5
+		current5 = zeroT5
+	}
 	currentVersion5 := s.dep5.version()
 	allArgsSum += currentVersion5
 
-	current6 := s.dep6.value().(T6)
+	current6, ok6 := s.dep6.value().(T6)
+	if !ok6 {
+		var zeroT6 T6
+		current6 = zeroT6
+	}
 	currentVersion6 := s.dep6.version()
 	allArgsSum += currentVersion6
 
@@ -1626,28 +1850,60 @@ func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) value() any {
 	s.isDirty = false
 
 	var allArgsSum uint32
-	depValue0 := s.dep0.value().(T0)
+	depValue0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		depValue0 = zeroT0
+	}
 	depVersion0 := s.dep0.version()
 	allArgsSum += depVersion0
-	depValue1 := s.dep1.value().(T1)
+	depValue1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		depValue1 = zeroT1
+	}
 	depVersion1 := s.dep1.version()
 	allArgsSum += depVersion1
-	depValue2 := s.dep2.value().(T2)
+	depValue2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		depValue2 = zeroT2
+	}
 	depVersion2 := s.dep2.version()
 	allArgsSum += depVersion2
-	depValue3 := s.dep3.value().(T3)
+	depValue3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		depValue3 = zeroT3
+	}
 	depVersion3 := s.dep3.version()
 	allArgsSum += depVersion3
-	depValue4 := s.dep4.value().(T4)
+	depValue4, ok4 := s.dep4.value().(T4)
+	if !ok4 {
+		var zeroT4 T4
+		depValue4 = zeroT4
+	}
 	depVersion4 := s.dep4.version()
 	allArgsSum += depVersion4
-	depValue5 := s.dep5.value().(T5)
+	depValue5, ok5 := s.dep5.value().(T5)
+	if !ok5 {
+		var zeroT5 T5
+		depValue5 = zeroT5
+	}
 	depVersion5 := s.dep5.version()
 	allArgsSum += depVersion5
-	depValue6 := s.dep6.value().(T6)
+	depValue6, ok6 := s.dep6.value().(T6)
+	if !ok6 {
+		var zeroT6 T6
+		depValue6 = zeroT6
+	}
 	depVersion6 := s.dep6.version()
 	allArgsSum += depVersion6
-	depValue7 := s.dep7.value().(T7)
+	depValue7, ok7 := s.dep7.value().(T7)
+	if !ok7 {
+		var zeroT7 T7
+		depValue7 = zeroT7
+	}
 	depVersion7 := s.dep7.version()
 	allArgsSum += depVersion7
 	if allArgsSum == s.versionSum {
@@ -1774,35 +2030,67 @@ func Effect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable](
 func (s *SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]) value() any {
 	var allArgsSum uint32
 
-	current0 := s.dep0.value().(T0)
+	current0, ok0 := s.dep0.value().(T0)
+	if !ok0 {
+		var zeroT0 T0
+		current0 = zeroT0
+	}
 	currentVersion0 := s.dep0.version()
 	allArgsSum += currentVersion0
 
-	current1 := s.dep1.value().(T1)
+	current1, ok1 := s.dep1.value().(T1)
+	if !ok1 {
+		var zeroT1 T1
+		current1 = zeroT1
+	}
 	currentVersion1 := s.dep1.version()
 	allArgsSum += currentVersion1
 
-	current2 := s.dep2.value().(T2)
+	current2, ok2 := s.dep2.value().(T2)
+	if !ok2 {
+		var zeroT2 T2
+		current2 = zeroT2
+	}
 	currentVersion2 := s.dep2.version()
 	allArgsSum += currentVersion2
 
-	current3 := s.dep3.value().(T3)
+	current3, ok3 := s.dep3.value().(T3)
+	if !ok3 {
+		var zeroT3 T3
+		current3 = zeroT3
+	}
 	currentVersion3 := s.dep3.version()
 	allArgsSum += currentVersion3
 
-	current4 := s.dep4.value().(T4)
+	current4, ok4 := s.dep4.value().(T4)
+	if !ok4 {
+		var zeroT4 T4
+		current4 = zeroT4
+	}
 	currentVersion4 := s.dep4.version()
 	allArgsSum += currentVersion4
 
-	current5 := s.dep5.value().(T5)
+	current5, ok5 := s.dep5.value().(T5)
+	if !ok5 {
+		var zeroT5 T5
+		current5 = zeroT5
+	}
 	currentVersion5 := s.dep5.version()
 	allArgsSum += currentVersion5
 
-	current6 := s.dep6.value().(T6)
+	current6, ok6 := s.dep6.value().(T6)
+	if !ok6 {
+		var zeroT6 T6
+		current6 = zeroT6
+	}
 	currentVersion6 := s.dep6.version()
 	allArgsSum += currentVersion6
 
-	current7 := s.dep7.value().(T7)
+	current7, ok7 := s.dep7.value().(T7)
+	if !ok7 {
+		var zeroT7 T7
+		current7 = zeroT7
+	}
 	currentVersion7 := s.dep7.version()
 	allArgsSum += currentVersion7
 
