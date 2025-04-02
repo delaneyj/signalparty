@@ -3,12 +3,13 @@ package rocket
 import "sync"
 
 type ReactiveSystem struct {
-	mu sync.RWMutex
+	mu       sync.Mutex
+	inEffect bool
 }
 
 func NewReactiveSystem() *ReactiveSystem {
 	return &ReactiveSystem{
-		mu: sync.RWMutex{},
+		mu: sync.Mutex{},
 	}
 }
 
@@ -31,8 +32,10 @@ type WriteableSignal[T comparable] struct {
 }
 
 func (s *WriteableSignal[T]) Value() T {
-	s.rs.mu.RLock()
-	defer s.rs.mu.RUnlock()
+	if !s.rs.inEffect {
+		s.rs.mu.Lock()
+		defer s.rs.mu.Unlock()
+	}
 	return s.val
 }
 
@@ -45,8 +48,10 @@ func (s *WriteableSignal[T]) version() uint32 {
 }
 
 func (s *WriteableSignal[T]) SetValue(value T) {
-	s.rs.mu.Lock()
-	defer s.rs.mu.Unlock()
+	if !s.rs.inEffect {
+		s.rs.mu.Lock()
+		defer s.rs.mu.Unlock()
+	}
 
 	if s.val == value {
 		return
@@ -124,7 +129,6 @@ func Computed1[T0, O comparable](
 func (s *ReadonlySignal1[T0, O]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
-
 	return s.value().(O)
 }
 
@@ -195,6 +199,7 @@ func Effect1[T0 comparable](
 	fn func(T0) error,
 ) (stop func()) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect1[T0]{
 		rs:         rs,
@@ -204,13 +209,15 @@ func Effect1[T0 comparable](
 	}
 	dep0.addSubs(s)
 
-	rs.mu.Unlock()
-
+	s.rs.inEffect = true
 	s.fn(
 		dep0.value().(T0),
 	)
+	s.rs.inEffect = false
 
 	return func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
 		dep0.removeSub(s)
 	}
 }
@@ -231,9 +238,11 @@ func (s *SideEffect1[T0]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	s.rs.inEffect = true
 	s.fn(
 		current0,
 	)
+	s.rs.inEffect = false
 	return nil
 }
 
@@ -286,7 +295,6 @@ func Computed2[T0, T1, O comparable](
 func (s *ReadonlySignal2[T0, T1, O]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
-
 	return s.value().(O)
 }
 
@@ -367,6 +375,7 @@ func Effect2[T0, T1 comparable](
 	fn func(T0, T1) error,
 ) (stop func()) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect2[T0, T1]{
 		rs:         rs,
@@ -378,14 +387,16 @@ func Effect2[T0, T1 comparable](
 	dep0.addSubs(s)
 	dep1.addSubs(s)
 
-	rs.mu.Unlock()
-
+	s.rs.inEffect = true
 	s.fn(
 		dep0.value().(T0),
 		dep1.value().(T1),
 	)
+	s.rs.inEffect = false
 
 	return func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
 		dep0.removeSub(s)
 		dep1.removeSub(s)
 	}
@@ -415,10 +426,12 @@ func (s *SideEffect2[T0, T1]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	s.rs.inEffect = true
 	s.fn(
 		current0,
 		current1,
 	)
+	s.rs.inEffect = false
 	return nil
 }
 
@@ -476,7 +489,6 @@ func Computed3[T0, T1, T2, O comparable](
 func (s *ReadonlySignal3[T0, T1, T2, O]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
-
 	return s.value().(O)
 }
 
@@ -567,6 +579,7 @@ func Effect3[T0, T1, T2 comparable](
 	fn func(T0, T1, T2) error,
 ) (stop func()) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect3[T0, T1, T2]{
 		rs:         rs,
@@ -580,15 +593,17 @@ func Effect3[T0, T1, T2 comparable](
 	dep1.addSubs(s)
 	dep2.addSubs(s)
 
-	rs.mu.Unlock()
-
+	s.rs.inEffect = true
 	s.fn(
 		dep0.value().(T0),
 		dep1.value().(T1),
 		dep2.value().(T2),
 	)
+	s.rs.inEffect = false
 
 	return func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
 		dep0.removeSub(s)
 		dep1.removeSub(s)
 		dep2.removeSub(s)
@@ -627,11 +642,13 @@ func (s *SideEffect3[T0, T1, T2]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	s.rs.inEffect = true
 	s.fn(
 		current0,
 		current1,
 		current2,
 	)
+	s.rs.inEffect = false
 	return nil
 }
 
@@ -694,7 +711,6 @@ func Computed4[T0, T1, T2, T3, O comparable](
 func (s *ReadonlySignal4[T0, T1, T2, T3, O]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
-
 	return s.value().(O)
 }
 
@@ -795,6 +811,7 @@ func Effect4[T0, T1, T2, T3 comparable](
 	fn func(T0, T1, T2, T3) error,
 ) (stop func()) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect4[T0, T1, T2, T3]{
 		rs:         rs,
@@ -810,16 +827,18 @@ func Effect4[T0, T1, T2, T3 comparable](
 	dep2.addSubs(s)
 	dep3.addSubs(s)
 
-	rs.mu.Unlock()
-
+	s.rs.inEffect = true
 	s.fn(
 		dep0.value().(T0),
 		dep1.value().(T1),
 		dep2.value().(T2),
 		dep3.value().(T3),
 	)
+	s.rs.inEffect = false
 
 	return func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
 		dep0.removeSub(s)
 		dep1.removeSub(s)
 		dep2.removeSub(s)
@@ -867,12 +886,14 @@ func (s *SideEffect4[T0, T1, T2, T3]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	s.rs.inEffect = true
 	s.fn(
 		current0,
 		current1,
 		current2,
 		current3,
 	)
+	s.rs.inEffect = false
 	return nil
 }
 
@@ -940,7 +961,6 @@ func Computed5[T0, T1, T2, T3, T4, O comparable](
 func (s *ReadonlySignal5[T0, T1, T2, T3, T4, O]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
-
 	return s.value().(O)
 }
 
@@ -1051,6 +1071,7 @@ func Effect5[T0, T1, T2, T3, T4 comparable](
 	fn func(T0, T1, T2, T3, T4) error,
 ) (stop func()) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect5[T0, T1, T2, T3, T4]{
 		rs:         rs,
@@ -1068,8 +1089,7 @@ func Effect5[T0, T1, T2, T3, T4 comparable](
 	dep3.addSubs(s)
 	dep4.addSubs(s)
 
-	rs.mu.Unlock()
-
+	s.rs.inEffect = true
 	s.fn(
 		dep0.value().(T0),
 		dep1.value().(T1),
@@ -1077,8 +1097,11 @@ func Effect5[T0, T1, T2, T3, T4 comparable](
 		dep3.value().(T3),
 		dep4.value().(T4),
 	)
+	s.rs.inEffect = false
 
 	return func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
 		dep0.removeSub(s)
 		dep1.removeSub(s)
 		dep2.removeSub(s)
@@ -1135,6 +1158,7 @@ func (s *SideEffect5[T0, T1, T2, T3, T4]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	s.rs.inEffect = true
 	s.fn(
 		current0,
 		current1,
@@ -1142,6 +1166,7 @@ func (s *SideEffect5[T0, T1, T2, T3, T4]) value() any {
 		current3,
 		current4,
 	)
+	s.rs.inEffect = false
 	return nil
 }
 
@@ -1214,7 +1239,6 @@ func Computed6[T0, T1, T2, T3, T4, T5, O comparable](
 func (s *ReadonlySignal6[T0, T1, T2, T3, T4, T5, O]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
-
 	return s.value().(O)
 }
 
@@ -1335,6 +1359,7 @@ func Effect6[T0, T1, T2, T3, T4, T5 comparable](
 	fn func(T0, T1, T2, T3, T4, T5) error,
 ) (stop func()) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect6[T0, T1, T2, T3, T4, T5]{
 		rs:         rs,
@@ -1354,8 +1379,7 @@ func Effect6[T0, T1, T2, T3, T4, T5 comparable](
 	dep4.addSubs(s)
 	dep5.addSubs(s)
 
-	rs.mu.Unlock()
-
+	s.rs.inEffect = true
 	s.fn(
 		dep0.value().(T0),
 		dep1.value().(T1),
@@ -1364,8 +1388,11 @@ func Effect6[T0, T1, T2, T3, T4, T5 comparable](
 		dep4.value().(T4),
 		dep5.value().(T5),
 	)
+	s.rs.inEffect = false
 
 	return func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
 		dep0.removeSub(s)
 		dep1.removeSub(s)
 		dep2.removeSub(s)
@@ -1431,6 +1458,7 @@ func (s *SideEffect6[T0, T1, T2, T3, T4, T5]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	s.rs.inEffect = true
 	s.fn(
 		current0,
 		current1,
@@ -1439,6 +1467,7 @@ func (s *SideEffect6[T0, T1, T2, T3, T4, T5]) value() any {
 		current4,
 		current5,
 	)
+	s.rs.inEffect = false
 	return nil
 }
 
@@ -1516,7 +1545,6 @@ func Computed7[T0, T1, T2, T3, T4, T5, T6, O comparable](
 func (s *ReadonlySignal7[T0, T1, T2, T3, T4, T5, T6, O]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
-
 	return s.value().(O)
 }
 
@@ -1647,6 +1675,7 @@ func Effect7[T0, T1, T2, T3, T4, T5, T6 comparable](
 	fn func(T0, T1, T2, T3, T4, T5, T6) error,
 ) (stop func()) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect7[T0, T1, T2, T3, T4, T5, T6]{
 		rs:         rs,
@@ -1668,8 +1697,7 @@ func Effect7[T0, T1, T2, T3, T4, T5, T6 comparable](
 	dep5.addSubs(s)
 	dep6.addSubs(s)
 
-	rs.mu.Unlock()
-
+	s.rs.inEffect = true
 	s.fn(
 		dep0.value().(T0),
 		dep1.value().(T1),
@@ -1679,8 +1707,11 @@ func Effect7[T0, T1, T2, T3, T4, T5, T6 comparable](
 		dep5.value().(T5),
 		dep6.value().(T6),
 	)
+	s.rs.inEffect = false
 
 	return func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
 		dep0.removeSub(s)
 		dep1.removeSub(s)
 		dep2.removeSub(s)
@@ -1755,6 +1786,7 @@ func (s *SideEffect7[T0, T1, T2, T3, T4, T5, T6]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	s.rs.inEffect = true
 	s.fn(
 		current0,
 		current1,
@@ -1764,6 +1796,7 @@ func (s *SideEffect7[T0, T1, T2, T3, T4, T5, T6]) value() any {
 		current5,
 		current6,
 	)
+	s.rs.inEffect = false
 	return nil
 }
 
@@ -1846,7 +1879,6 @@ func Computed8[T0, T1, T2, T3, T4, T5, T6, T7, O comparable](
 func (s *ReadonlySignal8[T0, T1, T2, T3, T4, T5, T6, T7, O]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
-
 	return s.value().(O)
 }
 
@@ -1987,6 +2019,7 @@ func Effect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable](
 	fn func(T0, T1, T2, T3, T4, T5, T6, T7) error,
 ) (stop func()) {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 
 	s := &SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]{
 		rs:         rs,
@@ -2010,8 +2043,7 @@ func Effect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable](
 	dep6.addSubs(s)
 	dep7.addSubs(s)
 
-	rs.mu.Unlock()
-
+	s.rs.inEffect = true
 	s.fn(
 		dep0.value().(T0),
 		dep1.value().(T1),
@@ -2022,8 +2054,11 @@ func Effect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable](
 		dep6.value().(T6),
 		dep7.value().(T7),
 	)
+	s.rs.inEffect = false
 
 	return func() {
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
 		dep0.removeSub(s)
 		dep1.removeSub(s)
 		dep2.removeSub(s)
@@ -2107,6 +2142,7 @@ func (s *SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	s.rs.inEffect = true
 	s.fn(
 		current0,
 		current1,
@@ -2117,6 +2153,7 @@ func (s *SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]) value() any {
 		current6,
 		current7,
 	)
+	s.rs.inEffect = false
 	return nil
 }
 

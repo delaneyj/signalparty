@@ -12,14 +12,15 @@ import "sync"
 
 type ReactiveSystem struct {
 	{%- if shouldBeThreadSafe -%}
-	mu sync.RWMutex
+	mu sync.Mutex
+	inEffect bool
 	{%- endif -%}
 }
 
 func NewReactiveSystem() *ReactiveSystem {
 	return &ReactiveSystem{
 		{%- if shouldBeThreadSafe -%}
-		mu: sync.RWMutex{},
+		mu: sync.Mutex{},
 		{%- endif -%}
 	}
 }
@@ -45,8 +46,10 @@ type WriteableSignal[T comparable] struct {
 
 func (s *WriteableSignal[T]) Value() T {
 	{%- if shouldBeThreadSafe -%}
-	s.rs.mu.RLock()
-	defer s.rs.mu.RUnlock()
+	if !s.rs.inEffect {
+		s.rs.mu.Lock()
+		defer s.rs.mu.Unlock()
+	}
 	{%- endif -%}
 	return s.val
 }
@@ -61,8 +64,10 @@ func (s *WriteableSignal[T]) version() uint32 {
 
 func (s *WriteableSignal[T]) SetValue(value T) {
 	{%- if shouldBeThreadSafe -%}
-	s.rs.mu.Lock()
-	defer s.rs.mu.Unlock()
+	if !s.rs.inEffect {
+		s.rs.mu.Lock()
+		defer s.rs.mu.Unlock()
+	}
 	{%- endif -%}
 
 	if s.val == value {
@@ -175,7 +180,6 @@ func (s *{%s readonlyPrefix %}[{%s genericParamsWithOutput %}]) Value() O {
 	s.rs.mu.Lock()
 	defer s.rs.mu.Unlock()
 	{%- endif -%}
-
 	return s.value().(O)
 }
 
@@ -255,6 +259,7 @@ func Effect{%d i+1%}[{%s genericParamsComparable %}](
 )  (stop func()) {
 	{%- if shouldBeThreadSafe -%}
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
 	{%- endif -%}
 
 	s := &{%s effectPrefix %}[{%s genericParams %}]{
@@ -270,16 +275,22 @@ func Effect{%d i+1%}[{%s genericParamsComparable %}](
 	{%- endfor -%}
 
 	{%- if shouldBeThreadSafe -%}
-	rs.mu.Unlock()
-	{%- endif -%}
-
+	s.rs.inEffect = true
+	{% endif -%}
 	s.fn(
 		{%- for i := 0; i < genericCount; i++ -%}
 		dep{%d i %}.value().(T{%d i %}),
 		{%- endfor -%}
 	)
+	{%- if shouldBeThreadSafe -%}
+	s.rs.inEffect = false
+	{% endif -%}
 
 	return func(){
+		{%- if shouldBeThreadSafe -%}
+		rs.mu.Lock()
+		defer rs.mu.Unlock()
+		{%- endif -%}
 		{%- for i := 0; i < genericCount; i++ -%}
 		dep{%d i %}.removeSub(s)
 		{%- endfor -%}
@@ -305,11 +316,17 @@ func (s *{%s effectPrefix %}[{%s genericParams %}]) value() any {
 	}
 	s.versionSum = allArgsSum
 
+	{%- if shouldBeThreadSafe -%}
+	s.rs.inEffect = true
+	{% endif -%}
 	s.fn(
 		{%- for i := 0; i < genericCount; i++ -%}
 		current{%d i %},
 		{%- endfor -%}
 	)
+	{%- if shouldBeThreadSafe -%}
+	s.rs.inEffect = false
+	{% endif -%}
 	return nil
 }
 
