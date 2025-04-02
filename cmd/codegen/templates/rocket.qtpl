@@ -270,7 +270,7 @@ func Effect{%d i+1%}[{%s genericParamsComparable %}](
 	{%- endfor -%}
 
 	{%- if shouldBeThreadSafe -%}
-	defer rs.mu.Unlock()
+	rs.mu.Unlock()
 	{%- endif -%}
 
 	s.fn(
