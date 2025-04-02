@@ -255,7 +255,6 @@ func Effect{%d i+1%}[{%s genericParamsComparable %}](
 )  (stop func()) {
 	{%- if shouldBeThreadSafe -%}
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	{%- endif -%}
 
 	s := &{%s effectPrefix %}[{%s genericParams %}]{
@@ -269,6 +268,10 @@ func Effect{%d i+1%}[{%s genericParamsComparable %}](
 	{%- for i := 0; i < genericCount; i++ -%}
 	dep{%d i %}.addSubs(s)
 	{%- endfor -%}
+
+	{%- if shouldBeThreadSafe -%}
+	defer rs.mu.Unlock()
+	{%- endif -%}
 
 	s.fn(
 		{%- for i := 0; i < genericCount; i++ -%}

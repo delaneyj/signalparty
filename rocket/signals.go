@@ -195,7 +195,6 @@ func Effect1[T0 comparable](
 	fn func(T0) error,
 ) (stop func()) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	s := &SideEffect1[T0]{
 		rs:         rs,
@@ -204,6 +203,8 @@ func Effect1[T0 comparable](
 		dep0:       dep0,
 	}
 	dep0.addSubs(s)
+
+	defer rs.mu.Unlock()
 
 	s.fn(
 		dep0.value().(T0),
@@ -366,7 +367,6 @@ func Effect2[T0, T1 comparable](
 	fn func(T0, T1) error,
 ) (stop func()) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	s := &SideEffect2[T0, T1]{
 		rs:         rs,
@@ -377,6 +377,8 @@ func Effect2[T0, T1 comparable](
 	}
 	dep0.addSubs(s)
 	dep1.addSubs(s)
+
+	defer rs.mu.Unlock()
 
 	s.fn(
 		dep0.value().(T0),
@@ -565,7 +567,6 @@ func Effect3[T0, T1, T2 comparable](
 	fn func(T0, T1, T2) error,
 ) (stop func()) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	s := &SideEffect3[T0, T1, T2]{
 		rs:         rs,
@@ -578,6 +579,8 @@ func Effect3[T0, T1, T2 comparable](
 	dep0.addSubs(s)
 	dep1.addSubs(s)
 	dep2.addSubs(s)
+
+	defer rs.mu.Unlock()
 
 	s.fn(
 		dep0.value().(T0),
@@ -792,7 +795,6 @@ func Effect4[T0, T1, T2, T3 comparable](
 	fn func(T0, T1, T2, T3) error,
 ) (stop func()) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	s := &SideEffect4[T0, T1, T2, T3]{
 		rs:         rs,
@@ -807,6 +809,8 @@ func Effect4[T0, T1, T2, T3 comparable](
 	dep1.addSubs(s)
 	dep2.addSubs(s)
 	dep3.addSubs(s)
+
+	defer rs.mu.Unlock()
 
 	s.fn(
 		dep0.value().(T0),
@@ -1047,7 +1051,6 @@ func Effect5[T0, T1, T2, T3, T4 comparable](
 	fn func(T0, T1, T2, T3, T4) error,
 ) (stop func()) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	s := &SideEffect5[T0, T1, T2, T3, T4]{
 		rs:         rs,
@@ -1064,6 +1067,8 @@ func Effect5[T0, T1, T2, T3, T4 comparable](
 	dep2.addSubs(s)
 	dep3.addSubs(s)
 	dep4.addSubs(s)
+
+	defer rs.mu.Unlock()
 
 	s.fn(
 		dep0.value().(T0),
@@ -1330,7 +1335,6 @@ func Effect6[T0, T1, T2, T3, T4, T5 comparable](
 	fn func(T0, T1, T2, T3, T4, T5) error,
 ) (stop func()) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	s := &SideEffect6[T0, T1, T2, T3, T4, T5]{
 		rs:         rs,
@@ -1349,6 +1353,8 @@ func Effect6[T0, T1, T2, T3, T4, T5 comparable](
 	dep3.addSubs(s)
 	dep4.addSubs(s)
 	dep5.addSubs(s)
+
+	defer rs.mu.Unlock()
 
 	s.fn(
 		dep0.value().(T0),
@@ -1641,7 +1647,6 @@ func Effect7[T0, T1, T2, T3, T4, T5, T6 comparable](
 	fn func(T0, T1, T2, T3, T4, T5, T6) error,
 ) (stop func()) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	s := &SideEffect7[T0, T1, T2, T3, T4, T5, T6]{
 		rs:         rs,
@@ -1662,6 +1667,8 @@ func Effect7[T0, T1, T2, T3, T4, T5, T6 comparable](
 	dep4.addSubs(s)
 	dep5.addSubs(s)
 	dep6.addSubs(s)
+
+	defer rs.mu.Unlock()
 
 	s.fn(
 		dep0.value().(T0),
@@ -1980,7 +1987,6 @@ func Effect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable](
 	fn func(T0, T1, T2, T3, T4, T5, T6, T7) error,
 ) (stop func()) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	s := &SideEffect8[T0, T1, T2, T3, T4, T5, T6, T7]{
 		rs:         rs,
@@ -2003,6 +2009,8 @@ func Effect8[T0, T1, T2, T3, T4, T5, T6, T7 comparable](
 	dep5.addSubs(s)
 	dep6.addSubs(s)
 	dep7.addSubs(s)
+
+	defer rs.mu.Unlock()
 
 	s.fn(
 		dep0.value().(T0),
